@@ -1,9 +1,8 @@
 use crate::hashing::hash_password;
 use crate::models::db::User;
-use crate::models::user::CreateUser;
+use crate::models::user::{CreateUser, LoginUser};
 use chrono::prelude::*;
 use rocket::http::Status;
-use rocket::outcome::IntoOutcome;
 use rocket::post;
 use rocket::{State, serde::json::Json};
 use surrealdb::Surreal;
@@ -65,5 +64,31 @@ pub async fn signup(
             Status::InternalServerError,
             "Erreur de hashage du mot de passe".to_string(),
         ))
+    }
+}
+
+#[post("/auth/login", format = "json", data = "<user_json>")]
+pub async fn login(
+    user_json: Json<LoginUser>,
+    db: &State<Surreal<Client>>,
+) -> Result<(Status, Json<User>), (Status, String)> {
+    let user = user_json.into_inner();
+
+    let user_with_email: Option<User> = db
+        .query("SELECT * FROM user WHERE email = $email")
+        .bind(("email", user.email.clone()))
+        .await
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?
+        .take(0)
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+
+    if let Some(db_user) = user_with_email {
+        match crate::hashing::verify_password(&user.password, &db_user.password) {
+            Ok(true) => Ok((Status::Ok, Json(db_user))),
+            Ok(false) => Err((Status::Unauthorized, "Identifiants invalides".to_string())),
+            Err(e) => Err((Status::InternalServerError, e.to_string())),
+        }
+    } else {
+        Err((Status::Unauthorized, "Identifiants invalides".to_string()))
     }
 }

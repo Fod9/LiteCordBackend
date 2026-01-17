@@ -25,5 +25,5 @@ async fn rocket() -> _ {
 
     rocket::build()
         .manage(db)
-        .mount("/", routes![index, signup])
+        .mount("/", routes![index, signup, login])
 }
