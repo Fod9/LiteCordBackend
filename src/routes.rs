@@ -2,17 +2,39 @@ use crate::hashing::hash_password;
 use crate::models::db::User;
 use crate::models::user::CreateUser;
 use chrono::prelude::*;
+use rocket::http::Status;
+use rocket::outcome::IntoOutcome;
+use rocket::post;
 use rocket::{State, serde::json::Json};
-use rocket::{get, post};
 use surrealdb::Surreal;
 use surrealdb::engine::remote::ws::Client;
 use surrealdb::sql::Datetime;
 
-#[post("/auth/signup", format = "json", data = "<user>")]
+#[post("/auth/signup", format = "json", data = "<user_json>")]
 pub async fn signup(
-    user: Json<CreateUser>,
+    user_json: Json<CreateUser>,
     db: &State<Surreal<Client>>,
-) -> Result<Json<User>, String> {
+) -> Result<(Status, Json<User>), (Status, String)> {
+    let user = user_json.into_inner();
+
+    let mut result = db
+        .query("SELECT * FROM user WHERE email = $email OR name = $name")
+        .bind(("email", user.email.clone()))
+        .bind(("name", user.name.clone()))
+        .await
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+
+    let existing_users: Vec<User> = result
+        .take(0)
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+
+    if !existing_users.is_empty() {
+        return Err((
+            Status::Conflict,
+            "Email ou Nom d'utilisateur déjà utilisé".to_string(),
+        ));
+    }
+
     if let Ok(hashed_password) = hash_password(&user.password) {
         let content = User {
             id: None,
@@ -29,13 +51,19 @@ pub async fn signup(
             .create("user")
             .content(content)
             .await
-            .map_err(|e| format!("Erreur DB: {}", e))?;
+            .map_err(|e| (Status::InternalServerError, e.to_string()))?;
 
         match created_record {
-            Some(u) => Ok(Json(u)),
-            None => Err("Erreur lors de la création".to_string()),
+            Some(u) => Ok((Status::Created, Json(u))),
+            None => Err((
+                Status::InternalServerError,
+                "Erreur lors de la création".to_string(),
+            )),
         }
     } else {
-        Err("Erreur de hashage du mot de passe".to_string())
+        Err((
+            Status::InternalServerError,
+            "Erreur de hashage du mot de passe".to_string(),
+        ))
     }
 }
