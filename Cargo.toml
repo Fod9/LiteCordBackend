@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-config = "0.15.19"
-dotenvy = "0.15.7"
-rocket = "0.5.1"
 serde = "1.0.228"
+config = "0.15.19"
+rocket = { version = "0.5.1", features = ["json"] }
+dotenvy = "0.15.7"
 surrealdb = "2.4.1"
 thiserror = "2.0.17"
+argon2 = "0.5.3"
+chrono = "0.4.43"

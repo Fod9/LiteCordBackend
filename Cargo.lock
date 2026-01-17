@@ -2177,6 +2177,8 @@ checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
 name = "litecord-backend"
 version = "0.1.0"
 dependencies = [
+ "argon2",
+ "chrono",
  "config",
  "dotenvy",
  "rocket",
@@ -3343,6 +3345,7 @@ dependencies = [
  "rocket_codegen",
  "rocket_http",
  "serde",
+ "serde_json",
  "state",
  "tempfile",
  "time",

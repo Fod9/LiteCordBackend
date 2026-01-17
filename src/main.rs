@@ -2,6 +2,7 @@
 extern crate rocket;
 use litecord_backend::db::init_db;
 use litecord_backend::environment::Config;
+use litecord_backend::routes::*;
 
 use rocket::figment::{Figment, providers::Env};
 
@@ -18,9 +19,11 @@ async fn rocket() -> _ {
         .extract()
         .expect("Erreur de config");
 
-    init_db(config)
+    let db = init_db(config)
         .await
         .expect("Failed to initialize database");
 
-    rocket::build().mount("/", routes![index])
+    rocket::build()
+        .manage(db)
+        .mount("/", routes![index, signup])
 }
