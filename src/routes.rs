@@ -1,5 +1,5 @@
 use crate::hashing::hash_password;
-use crate::jwt;
+use crate::jwt::{self, generate_jwt};
 use crate::models::db::User;
 use crate::models::user::{CreateUser, LoginSuccess, LoginUser};
 use ::jwt::Token;
@@ -105,7 +105,7 @@ pub async fn signup(
 pub async fn login(
     user_json: Json<LoginUser>,
     db: &State<Surreal<Client>>,
-) -> Result<(Status, Json<User>), (Status, String)> {
+) -> Result<(Status, Json<LoginSuccess>), (Status, String)> {
     let user = user_json.into_inner();
 
     let user_with_email: Option<User> = db
@@ -118,7 +118,40 @@ pub async fn login(
 
     if let Some(db_user) = user_with_email {
         match crate::hashing::verify_password(&user.password, &db_user.password) {
-            Ok(true) => Ok((Status::Ok, Json(db_user))),
+            Ok(true) => {
+                let user_id = &db_user.id.ok_or((
+                    Status::InternalServerError,
+                    "No id found for this user".to_string(),
+                ))?;
+
+                let token = generate_jwt(&user_id)
+                    .map_err(|_| {
+                        (
+                            Status::InternalServerError,
+                            "Cannot generate a token".to_string(),
+                        )
+                    })?
+                    .as_str()
+                    .to_string();
+
+                let refresh_token = generate_jwt(&user_id)
+                    .map_err(|_| {
+                        (
+                            Status::InternalServerError,
+                            "Cannot generate a token".to_string(),
+                        )
+                    })?
+                    .as_str()
+                    .to_string();
+
+                Ok((
+                    Status::Ok,
+                    Json(LoginSuccess {
+                        token: token,
+                        refresh_token: refresh_token,
+                    }),
+                ))
+            }
             Ok(false) => Err((Status::Unauthorized, "Identifiants invalides".to_string())),
             Err(e) => Err((Status::InternalServerError, e.to_string())),
         }
