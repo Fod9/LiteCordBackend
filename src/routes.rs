@@ -56,28 +56,37 @@ pub async fn signup(
 
         match created_record {
             Some(u) => {
-                if let Some(user_id) = &u.id {
-                    let token = jwt::generate_jwt(user_id);
-                    let refresh_token = jwt::generate_jwt(user_id);
-                    if let (Ok(token), Ok(refresh_token)) = (token, refresh_token) {
-                        let login_success = LoginSuccess {
-                            token: token.as_str().to_string(),
-                            refresh_token: refresh_token.as_str().to_string(),
-                        };
+                let user_id = u.id.ok_or((
+                    Status::InternalServerError,
+                    "Erreur aucun ID trouvé pour cet utilisateur".to_string(),
+                ))?;
 
-                        Ok((Status::Created, Json(login_success)))
-                    } else {
-                        Err((
+                let token = jwt::generate_jwt(&user_id)
+                    .map_err(|_| {
+                        (
                             Status::InternalServerError,
-                            "Erreur lors de la création des JWT".to_string(),
-                        ))
-                    }
-                } else {
-                    Err((
-                        Status::InternalServerError,
-                        "Erreur aucun ID trouvé pour cette utilisateur".to_string(),
-                    ))
-                }
+                            "Erreur lors de la création du token".to_string(),
+                        )
+                    })?
+                    .as_str()
+                    .to_string();
+
+                let refresh_token = jwt::generate_jwt(&user_id)
+                    .map_err(|_| {
+                        (
+                            Status::InternalServerError,
+                            "Erreur lors de la création du refresh token".to_string(),
+                        )
+                    })?
+                    .as_str()
+                    .to_string();
+
+                let login_success = LoginSuccess {
+                    token: token,
+                    refresh_token: refresh_token,
+                };
+
+                Ok((Status::Created, Json(login_success)))
             }
             None => Err((
                 Status::InternalServerError,
