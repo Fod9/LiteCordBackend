@@ -14,14 +14,8 @@ fn index() -> &'static str {
 #[launch]
 async fn rocket() -> _ {
     dotenvy::dotenv().ok();
-    let config: Config = Figment::new()
-        .merge(Env::prefixed("ROCKET_"))
-        .extract()
-        .expect("Erreur de config");
 
-    let db = init_db(config)
-        .await
-        .expect("Failed to initialize database");
+    let db = init_db().await.expect("Failed to initialize database");
 
     rocket::build()
         .manage(db)

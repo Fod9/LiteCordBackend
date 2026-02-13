@@ -1,6 +1,8 @@
 use crate::hashing::hash_password;
+use crate::jwt;
 use crate::models::db::User;
-use crate::models::user::{CreateUser, LoginUser};
+use crate::models::user::{CreateUser, LoginSuccess, LoginUser};
+use ::jwt::Token;
 use chrono::prelude::*;
 use rocket::http::Status;
 use rocket::post;
@@ -13,7 +15,7 @@ use surrealdb::sql::Datetime;
 pub async fn signup(
     user_json: Json<CreateUser>,
     db: &State<Surreal<Client>>,
-) -> Result<(Status, Json<User>), (Status, String)> {
+) -> Result<(Status, Json<LoginSuccess>), (Status, String)> {
     let user = user_json.into_inner();
 
     let mut result = db
@@ -53,7 +55,30 @@ pub async fn signup(
             .map_err(|e| (Status::InternalServerError, e.to_string()))?;
 
         match created_record {
-            Some(u) => Ok((Status::Created, Json(u))),
+            Some(u) => {
+                if let Some(user_id) = &u.id {
+                    let token = jwt::generate_jwt(user_id);
+                    let refresh_token = jwt::generate_jwt(user_id);
+                    if let (Ok(token), Ok(refresh_token)) = (token, refresh_token) {
+                        let login_success = LoginSuccess {
+                            token: token.as_str().to_string(),
+                            refresh_token: refresh_token.as_str().to_string(),
+                        };
+
+                        Ok((Status::Created, Json(login_success)))
+                    } else {
+                        Err((
+                            Status::InternalServerError,
+                            "Erreur lors de la création des JWT".to_string(),
+                        ))
+                    }
+                } else {
+                    Err((
+                        Status::InternalServerError,
+                        "Erreur aucun ID trouvé pour cette utilisateur".to_string(),
+                    ))
+                }
+            }
             None => Err((
                 Status::InternalServerError,
                 "Erreur lors de la création".to_string(),

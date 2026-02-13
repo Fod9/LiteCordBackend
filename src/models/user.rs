@@ -14,3 +14,10 @@ pub struct LoginUser {
     pub email: String,
     pub password: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(crate = "rocket::serde")]
+pub struct LoginSuccess {
+    pub token: String,
+    pub refresh_token: String,
+}
