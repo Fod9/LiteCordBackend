@@ -7,13 +7,44 @@ use hmac::{Hmac, Mac};
 use jwt::VerifyWithKey;
 use jwt::{AlgorithmType, Header, SignWithKey, Token, token::Signed};
 use rocket::State;
+
 use sha2::Sha384;
 use std::collections::BTreeMap;
 use surrealdb::{Surreal, engine::remote::ws::Client, sql::Thing};
 
 pub type SignedToken = Token<Header, BTreeMap<String, String>, Signed>;
 
-pub fn generate_jwt(id: &Thing) -> Result<SignedToken, Box<dyn std::error::Error>> {
+pub struct TokenClaims {
+    pub iat: String,
+    pub user_id: String,
+    pub token_type: String,
+}
+
+impl TokenClaims {
+    pub fn from_claims(
+        claims: &BTreeMap<String, String>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let iat = claims.get("iat").ok_or("Missing 'iat' claim")?.to_string();
+        let user_id = claims
+            .get("user_id")
+            .ok_or("Missing 'user_id' claim")?
+            .to_string();
+        let token_type = claims
+            .get("type")
+            .ok_or("Missing 'type' claim")?
+            .to_string();
+        Ok(TokenClaims {
+            iat,
+            user_id,
+            token_type,
+        })
+    }
+}
+
+pub fn generate_jwt(
+    id: &Thing,
+    token_type: String,
+) -> Result<SignedToken, Box<dyn std::error::Error>> {
     let config = get_config();
     let key: Hmac<Sha384> = <Hmac<Sha384> as Mac>::new_from_slice(config.jwt_secret.as_bytes())?;
     let mut claims: BTreeMap<String, String> = BTreeMap::new();
@@ -21,7 +52,9 @@ pub fn generate_jwt(id: &Thing) -> Result<SignedToken, Box<dyn std::error::Error
         "iat".to_string(),
         format!("{}", chrono::Utc::now().timestamp()),
     );
+    claims.insert("type".to_string(), token_type);
     claims.insert("user_id".to_string(), id.to_string());
+
     let header = Header {
         algorithm: AlgorithmType::Hs384,
         ..Default::default()
@@ -30,11 +63,35 @@ pub fn generate_jwt(id: &Thing) -> Result<SignedToken, Box<dyn std::error::Error
     Ok(token)
 }
 
-pub fn decode_token(token: &str) -> Result<BTreeMap<String, String>, Box<dyn std::error::Error>> {
+pub fn decode_token(token: &str) -> Result<TokenClaims, Box<dyn std::error::Error>> {
     let config = get_config();
     let key: Hmac<Sha384> = <Hmac<Sha384> as Mac>::new_from_slice(config.jwt_secret.as_bytes())?;
     let token: Token<Header, BTreeMap<String, String>, _> = token.verify_with_key(&key)?;
-    Ok(token.claims().clone())
+
+    let result = token
+        .claims()
+        .get("iat")
+        .ok_or("Token missing 'iat' claim")?;
+    if let Ok(iat) = result.parse::<i64>() {
+        let now = chrono::Utc::now().timestamp();
+        match token.claims().get("type") {
+            Some(token_type) if token_type == "access" => {
+                if now - iat > config.token_expiration_seconds {
+                    return Err("Token expired".into());
+                }
+            }
+            Some(token_type) if token_type == "refresh" => {
+                if now - iat > config.refresh_token_expiration_seconds {
+                    return Err("Refresh token expired".into());
+                }
+            }
+            _ => return Err("Invalid 'type' claim".into()),
+        }
+    } else {
+        return Err("Invalid 'iat' claim".into());
+    }
+
+    Ok(TokenClaims::from_claims(token.claims())?)
 }
 
 pub async fn check_if_refresh_token_in_db(

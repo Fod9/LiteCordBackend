@@ -59,7 +59,7 @@ pub async fn signup(
                     "Erreur aucun ID trouvé pour cet utilisateur".to_string(),
                 ))?;
 
-                let token = jwt::generate_jwt(&user_id)
+                let token = jwt::generate_jwt(&user_id, "access".to_string())
                     .map_err(|_| {
                         (
                             Status::InternalServerError,
@@ -69,7 +69,7 @@ pub async fn signup(
                     .as_str()
                     .to_string();
 
-                let refresh_token = jwt::generate_jwt(&user_id)
+                let refresh_token = jwt::generate_jwt(&user_id, "refresh".to_string())
                     .map_err(|_| {
                         (
                             Status::InternalServerError,
@@ -121,7 +121,7 @@ pub async fn signin(
                     "No id found for this user".to_string(),
                 ))?;
 
-                let token = jwt::generate_jwt(&user_id)
+                let token = jwt::generate_jwt(&user_id, "access".to_string())
                     .map_err(|_| {
                         (
                             Status::InternalServerError,
@@ -131,12 +131,13 @@ pub async fn signin(
                     .as_str()
                     .to_string();
 
-                let refresh_token = jwt::generate_jwt(&user_id).map_err(|_| {
-                    (
-                        Status::InternalServerError,
-                        "Cannot generate a token".to_string(),
-                    )
-                })?;
+                let refresh_token =
+                    jwt::generate_jwt(&user_id, "refresh".to_string()).map_err(|_| {
+                        (
+                            Status::InternalServerError,
+                            "Cannot generate a token".to_string(),
+                        )
+                    })?;
 
                 println!(
                     "Storing JWT {} in DB for user_id {}",
@@ -178,13 +179,7 @@ pub async fn refresh_token(
             "Token de rafraîchissement invalide".to_string(),
         )
     })?;
-    let user_id_str = token_data
-        .get("user_id")
-        .ok_or((
-            Status::Unauthorized,
-            "Token de rafraîchissement invalide : user_id manquant".to_string(),
-        ))?
-        .clone();
+    let user_id_str = token_data.user_id.clone();
     let user_id: Thing = user_id_str
         .parse()
         .map_err(|_| (Status::Unauthorized, "user_id malformé".to_string()))?;
@@ -197,7 +192,7 @@ pub async fn refresh_token(
         ));
     }
 
-    let new_token_str = jwt::generate_jwt(&user_id)
+    let new_token_str = jwt::generate_jwt(&user_id, "access".to_string())
         .map(|t| t.as_str().to_string())
         .map_err(|_| {
             (
@@ -206,7 +201,7 @@ pub async fn refresh_token(
             )
         })?;
 
-    let new_refresh_token_str = jwt::generate_jwt(&user_id)
+    let new_refresh_token_str = jwt::generate_jwt(&user_id, "refresh".to_string())
         .map(|t| t.as_str().to_string())
         .map_err(|_| {
             (

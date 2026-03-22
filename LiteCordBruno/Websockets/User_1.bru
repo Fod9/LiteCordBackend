@@ -5,9 +5,13 @@ meta {
 }
 
 ws {
-  url: ws://{{rocket_domain}}:{{rocket_port}}/ws/1
+  url: ws://{{rocket_domain}}:{{rocket_port}}/ws/
   body: ws
-  auth: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: eyJhbGciOiJIUzM4NCJ9.eyJpYXQiOiIxNzc0MTgzODg4IiwidHlwZSI6ImFjY2VzcyIsInVzZXJfaWQiOiJ1c2VyOnNrN2tvdnVqbHk1ZG9qZDJ1Zm96In0.PDJh8LpDL4Z5o1-LxDdX_-6Cu3SEf1YvYaT7fvY7tVFs8lMvLaaCb7wsK8UXDLtt
 }
 
 body:ws {
@@ -15,8 +19,7 @@ body:ws {
   type: json
   content: '''
     {
-      "to": "2",
-      "from": "1",
+      "to": "user:1bo8mswodjzybtiyxfkw",
       "content": "Salut"
     }
   '''
