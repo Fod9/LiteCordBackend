@@ -6,7 +6,6 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, Mac};
 use jwt::VerifyWithKey;
 use jwt::{AlgorithmType, Header, SignWithKey, Token, token::Signed};
-use rocket::State;
 
 use sha2::Sha384;
 use std::collections::BTreeMap;
@@ -97,7 +96,7 @@ pub fn decode_token(token: &str) -> Result<TokenClaims, Box<dyn std::error::Erro
 pub async fn check_if_refresh_token_in_db(
     jwt: String,
     user_id: &Thing,
-    db: &State<Surreal<Client>>,
+    db: &Surreal<Client>,
 ) -> bool {
     let result = db
         .query("SELECT * FROM RefreshToken WHERE user = $user")
@@ -120,7 +119,7 @@ pub async fn check_if_refresh_token_in_db(
 pub async fn store_refresh_token_in_db(
     jwt: &str,
     user_id: &Thing,
-    db: &State<Surreal<Client>>,
+    db: &Surreal<Client>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let encrypted_token = encrypt_aes_refresh_token(jwt)?;
     db.query("CREATE RefreshToken SET token = $token_str, user = $user")
@@ -133,7 +132,7 @@ pub async fn store_refresh_token_in_db(
 pub async fn delete_refresh_token_from_db(
     jwt: &str,
     user_id: &Thing,
-    db: &State<Surreal<Client>>,
+    db: &Surreal<Client>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let result = db
         .query("SELECT * FROM RefreshToken WHERE user = $user")

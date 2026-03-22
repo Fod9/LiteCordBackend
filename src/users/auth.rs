@@ -171,7 +171,7 @@ pub async fn signin(
 
 pub async fn refresh_token(
     refresh_token: String,
-    db: &State<Surreal<Client>>,
+    db: &Surreal<Client>,
 ) -> Result<(Status, Json<LoginSuccess>), (Status, String)> {
     let token_data = jwt::decode_token(&refresh_token).map_err(|_| {
         (

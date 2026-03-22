@@ -1,5 +1,5 @@
 use rocket::tokio::sync::RwLock;
-use rocket::tokio::sync::broadcast::{Receiver, Sender};
+use rocket::tokio::sync::broadcast::Sender;
 use std::collections::HashMap;
 
 pub struct ChatHub {

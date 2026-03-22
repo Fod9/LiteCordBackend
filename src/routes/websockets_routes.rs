@@ -1,85 +1,180 @@
 use crate::chat::hub::ChatHub;
-use crate::chat::types::{AuthMessage, ChatMessage};
+use crate::chat::types::{AuthMessage, ChatMessage, RefreshMessage};
 use crate::jwt::decode_token;
+use crate::users::auth::refresh_token;
 use rocket::futures::{SinkExt, StreamExt};
 use rocket::get;
 use rocket::serde::json::serde_json;
 use rocket::tokio::sync::broadcast;
+use rocket::tokio::time::{Duration, interval};
 use rocket::{State, tokio};
+use rocket_ws::stream::DuplexStream;
 use rocket_ws::{self, Channel, Message, WebSocket};
 use std::sync::Arc;
+use surrealdb::Surreal;
+use surrealdb::engine::remote::ws::Client;
+
+struct AuthenticatedSession {
+    user_id: String,
+    token: String,
+}
 
 #[get("/")]
-pub fn websocket_index(ws: WebSocket, hub: &State<Arc<ChatHub>>) -> Channel<'static> {
+pub fn websocket_index(
+    ws: WebSocket,
+    hub: &State<Arc<ChatHub>>,
+    db: &State<Surreal<Client>>,
+) -> Channel<'static> {
     let hub = hub.inner().clone();
+    let db = db.inner().clone();
+
     ws.channel(move |mut stream| {
         Box::pin(async move {
-            let user_id = loop {
-                match stream.next().await {
-                    Some(Ok(Message::Text(text))) => {
-                        match serde_json::from_str::<AuthMessage>(&text) {
-                            Ok(auth_msg) => {
-                                if let Ok(claims) = decode_token(&auth_msg.token) {
-                                    break claims.user_id;
-                                } else {
-                                    let err = r#"{"error":"invalid token"}"#;
-                                    stream.send(Message::Text(err.into())).await?;
-                                    return Ok(());
-                                }
-                            }
-                            Err(_) => {
-                                let err = r#"{"error":"expected auth message"}"#;
-                                stream.send(Message::Text(err.into())).await?;
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) | None => return Ok(()),
-                    _ => {}
-                }
+            let Some(mut session) = authenticate(&mut stream).await? else {
+                return Ok(());
             };
 
-            let (tx, mut rx) = broadcast::channel(100);
-            {
-                let mut conns = hub.connections.write().await;
-                conns.insert(user_id.clone(), tx);
-                println!("User {} connected", user_id);
-            }
+            let mut rx = register_user(&hub, &session.user_id).await;
 
-            let ok = r#"{"status":"authenticated"}"#;
-            stream.send(Message::Text(ok.into())).await?;
+            send_json(&mut stream, r#"{"status":"authenticated"}"#).await?;
 
-            loop {
-                tokio::select! {
-                    Some(msg) = stream.next() => {
-                        match msg? {
-                            Message::Text(text) => {
-                                match serde_json::from_str::<ChatMessage>(&text) {
-                                    Ok(mut chat_msg) => {
-                                        chat_msg.from = Some(user_id.clone());
-                                        let conns = hub.connections.read().await;
-                                        if let Some(target_tx) = conns.get(&chat_msg.to) {
-                                            let json = serde_json::to_string(&chat_msg).unwrap();
-                                            let _ = target_tx.send(json);
-                                        }
-                                    }
-                                    Err(e) => println!("Parse error: {e}"),
-                                }
-                            }
-                            Message::Close(_) => break,
-                            _ => {}
-                        }
-                    }
-                    Ok(msg) = rx.recv() => {
-                        stream.send(Message::Text(msg)).await?;
-                    }
-                }
-            }
+            run_message_loop(&mut stream, &mut rx, &hub, &db, &mut session).await?;
 
-            // 5. Cleanup
-            let mut conns = hub.connections.write().await;
-            conns.remove(&user_id);
-            println!("User {} disconnected", user_id);
+            disconnect_user(&hub, &session.user_id).await;
+
             Ok(())
         })
     })
+}
+
+async fn authenticate(
+    stream: &mut DuplexStream,
+) -> Result<Option<AuthenticatedSession>, rocket_ws::result::Error> {
+    loop {
+        match stream.next().await {
+            Some(Ok(Message::Text(text))) => match serde_json::from_str::<AuthMessage>(&text) {
+                Ok(auth_msg) => {
+                    if let Ok(claims) = decode_token(&auth_msg.token) {
+                        return Ok(Some(AuthenticatedSession {
+                            user_id: claims.user_id,
+                            token: auth_msg.token,
+                        }));
+                    }
+                    send_json(stream, r#"{"error":"invalid token"}"#).await?;
+                    return Ok(None);
+                }
+                Err(_) => {
+                    send_json(stream, r#"{"error":"expected auth message"}"#).await?;
+                }
+            },
+            Some(Ok(Message::Close(_))) | None => return Ok(None),
+            _ => {}
+        }
+    }
+}
+
+async fn register_user(hub: &Arc<ChatHub>, user_id: &str) -> broadcast::Receiver<String> {
+    let (tx, rx) = broadcast::channel(100);
+    let mut conns = hub.connections.write().await;
+    conns.insert(user_id.to_string(), tx);
+    rx
+}
+
+async fn disconnect_user(hub: &Arc<ChatHub>, user_id: &str) {
+    let mut conns = hub.connections.write().await;
+    conns.remove(user_id);
+}
+
+async fn run_message_loop(
+    stream: &mut DuplexStream,
+    rx: &mut broadcast::Receiver<String>,
+    hub: &Arc<ChatHub>,
+    db: &Surreal<Client>,
+    session: &mut AuthenticatedSession,
+) -> Result<(), rocket_ws::result::Error> {
+    let mut auth_check = interval(Duration::from_secs(300));
+
+    loop {
+        tokio::select! {
+            Some(msg) = stream.next() => {
+                match msg? {
+                    Message::Text(text) => {
+                        handle_incoming_message(&text, &session.user_id, hub).await;
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+            Ok(msg) = rx.recv() => {
+                stream.send(Message::Text(msg)).await?;
+            }
+            _ = auth_check.tick() => {
+                if !handle_token_refresh(stream, db, session).await? {
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_incoming_message(text: &str, sender_id: &str, hub: &Arc<ChatHub>) {
+    match serde_json::from_str::<ChatMessage>(text) {
+        Ok(mut chat_msg) => {
+            chat_msg.from = Some(sender_id.to_string());
+            let conns = hub.connections.read().await;
+            if let Some(target_tx) = conns.get(&chat_msg.to) {
+                if let Ok(json) = serde_json::to_string(&chat_msg) {
+                    let _ = target_tx.send(json);
+                }
+            }
+        }
+        Err(e) => println!("Parse error: {e}"),
+    }
+}
+
+async fn handle_token_refresh(
+    stream: &mut DuplexStream,
+    db: &Surreal<Client>,
+    session: &mut AuthenticatedSession,
+) -> Result<bool, rocket_ws::result::Error> {
+    if decode_token(&session.token).is_ok() {
+        return Ok(true);
+    }
+
+    send_json(stream, r#"{"action":"token_refresh_required"}"#).await?;
+
+    let timeout = tokio::time::sleep(Duration::from_secs(30));
+    tokio::pin!(timeout);
+
+    loop {
+        tokio::select! {
+            Some(msg) = stream.next() => {
+                if let Ok(Message::Text(text)) = msg {
+                    if let Ok(refresh_msg) = serde_json::from_str::<RefreshMessage>(&text) {
+                        if let Ok((_, login_success)) = refresh_token(refresh_msg.refresh_token, db).await {
+                            session.token = login_success.token.clone();
+                            let ok = serde_json::json!({
+                                "status": "token_refreshed",
+                                "token": login_success.token,
+                                "refresh_token": login_success.refresh_token
+                            }).to_string();
+                            send_json(stream, &ok).await?;
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+            _ = &mut timeout => {
+                send_json(stream, r#"{"error":"token_refresh_timeout"}"#).await?;
+                stream.send(Message::Close(None)).await?;
+                return Ok(false);
+            }
+        }
+    }
+}
+
+async fn send_json(stream: &mut DuplexStream, json: &str) -> Result<(), rocket_ws::result::Error> {
+    stream.send(Message::Text(json.into())).await
 }
