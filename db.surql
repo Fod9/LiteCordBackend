@@ -16,6 +16,11 @@ DEFINE TABLE guild SCHEMAFULL;
     DEFINE FIELD owner           ON TABLE guild TYPE record<user>;
     DEFINE FIELD created_at      ON TABLE guild TYPE datetime DEFAULT time::now();
 
+
+DEFINE TABLE refresh_token SCHEMAFULL;
+    DEFINE FIELD user ON TABLE refresh_token TYPE record<user>;
+    DEFINE FIELD token ON TABLE refresh_token TYPE string;
+
 DEFINE TABLE role SCHEMAFULL;
     DEFINE FIELD guild           ON TABLE role TYPE record<guild>;
     DEFINE FIELD name            ON TABLE role TYPE string;

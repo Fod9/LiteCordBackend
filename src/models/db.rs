@@ -38,6 +38,13 @@ pub struct User {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct RefreshToken {
+    pub id: Option<Thing>,
+    pub user: Thing,
+    pub token: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct DMChannel {
     pub id: Option<Thing>,
     pub recipients: Vec<Thing>,

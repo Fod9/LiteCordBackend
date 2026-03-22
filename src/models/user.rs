@@ -21,3 +21,9 @@ pub struct LoginSuccess {
     pub token: String,
     pub refresh_token: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(crate = "rocket::serde")]
+pub struct RefreshTokenRequest {
+    pub refresh_token: String,
+}

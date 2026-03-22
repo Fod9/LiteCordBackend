@@ -3,6 +3,7 @@ pub mod hashing;
 pub mod jwt;
 pub mod models;
 pub mod routes;
+pub mod users;
 
 pub mod environment {
     use rocket::figment::{Figment, providers::Env};
@@ -16,6 +17,9 @@ pub mod environment {
         pub db_password: String,
         pub db_config_file: String,
         pub jwt_secret: String,
+        pub aes_key: String,
+        pub token_expiration_seconds: i64,
+        pub refresh_token_expiration_seconds: i64,
     }
 
     static CONFIG: OnceLock<Config> = OnceLock::new();

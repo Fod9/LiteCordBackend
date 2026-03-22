@@ -1,0 +1,22 @@
+meta {
+  name: Refresh
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{rocket_url}}:{{rocket_port}}/auth/refresh
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "refresh_token": "eyJhbGciOiJIUzM4NCJ9.eyJpYXQiOiIxNzc0MDkwODM5IiwidXNlcl9pZCI6InVzZXI6a2N1czhvZ3N5cGxpODg5c29tNzAifQ.bhTSSLQpCEPs_gVmKXy0RekbeKSsCRlJL-lce_1nmY4b8goP1BWS0lEPDtOWt5SW"
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}
