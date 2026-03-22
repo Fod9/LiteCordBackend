@@ -1,3 +1,4 @@
+pub mod chat;
 pub mod error;
 pub mod hashing;
 pub mod jwt;

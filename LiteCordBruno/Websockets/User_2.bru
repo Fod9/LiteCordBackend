@@ -1,0 +1,23 @@
+meta {
+  name: User_2
+  type: ws
+  seq: 2
+}
+
+ws {
+  url: ws://{{rocket_domain}}:{{rocket_port}}/ws/2
+  body: ws
+  auth: none
+}
+
+body:ws {
+  name: message 1
+  type: json
+  content: '''
+    {
+      "to": "1",
+      "from": "2",
+      "content": "Salut"
+    }
+  '''
+}
