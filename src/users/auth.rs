@@ -139,11 +139,6 @@ pub async fn signin(
                         )
                     })?;
 
-                println!(
-                    "Storing JWT {} in DB for user_id {}",
-                    refresh_token.as_str(),
-                    user_id
-                );
                 jwt::store_refresh_token_in_db(refresh_token.as_str(), user_id, db)
                     .await
                     .map_err(|e| {

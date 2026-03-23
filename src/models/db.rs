@@ -110,11 +110,13 @@ pub struct GuildInvite {
     pub expires_at: Option<String>,
     pub created_at: Datetime,
 }
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Channel {
     pub id: Option<Thing>,
     pub guild: Thing,
     pub name: String,
+    pub reciptions: Vec<Thing>,
     pub channel_type: ChannelType,
     pub category: Option<String>,
     pub created_at: Datetime,

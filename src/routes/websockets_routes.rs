@@ -99,7 +99,7 @@ async fn run_message_loop(
             Some(msg) = stream.next() => {
                 match msg? {
                     Message::Text(text) => {
-                        handle_incoming_message(&text, &session.user_id, hub).await;
+                        handle_incoming_message(db, &text, &session.user_id, hub).await;
                     }
                     Message::Close(_) => break,
                     _ => {}
@@ -119,11 +119,17 @@ async fn run_message_loop(
     Ok(())
 }
 
-async fn handle_incoming_message(text: &str, sender_id: &str, hub: &Arc<ChatHub>) {
+async fn handle_incoming_message(
+    db: &Surreal<Client>,
+    text: &str,
+    sender_id: &str,
+    hub: &Arc<ChatHub>,
+) {
     match serde_json::from_str::<ChatMessage>(text) {
         Ok(mut chat_msg) => {
             chat_msg.from = Some(sender_id.to_string());
             let conns = hub.connections.read().await;
+            ChatHub::send_to(hub, db, &chat_msg).await;
             if let Some(target_tx) = conns.get(&chat_msg.to) {
                 if let Ok(json) = serde_json::to_string(&chat_msg) {
                     let _ = target_tx.send(json);

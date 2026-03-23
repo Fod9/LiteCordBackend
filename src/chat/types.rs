@@ -7,12 +7,12 @@ pub struct ChatMessage {
     pub content: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
 pub struct AuthMessage {
     pub token: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
 pub struct RefreshMessage {
     pub refresh_token: String,
 }
