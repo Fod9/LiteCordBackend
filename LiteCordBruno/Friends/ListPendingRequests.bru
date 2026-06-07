@@ -1,0 +1,20 @@
+meta {
+  name: ListPendingRequests
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{rocket_url}}:{{rocket_port}}/friends/pending
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

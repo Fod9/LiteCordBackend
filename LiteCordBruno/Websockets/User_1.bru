@@ -5,7 +5,7 @@ meta {
 }
 
 ws {
-  url: ws://{{rocket_domain}}:{{rocket_port}}/ws/
+  url: ws://{{rocket_domain}}:{{rocket_port}}/ws/?token={{token}}
   body: ws
   auth: bearer
 }
@@ -19,8 +19,9 @@ body:ws {
   type: json
   content: '''
     {
-      "to": "user:1bo8mswodjzybtiyxfkw",
-      "content": "Salut"
+      "to": "DMChannel:8kjiulhl7c2ygl3jnnz7",
+      "content": "Salut",
+      "message_type": "new_message"
     }
   '''
 }

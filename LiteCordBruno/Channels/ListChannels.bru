@@ -1,0 +1,20 @@
+meta {
+  name: ListDMChannels
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{rocket_url}}:{{rocket_port}}/channels/list_dm
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

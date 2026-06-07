@@ -12,9 +12,16 @@ post {
 
 body:json {
   {
-    "email": "dernoncourt.tom@gmail.com",
-    "name": "FoD9",
+    "email": "dernoncourt.tom+3@gmail.com",
+    "name": "FoD97",
     "password": "test"
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setVar("token", res.body.token);
+    bru.setVar("refresh_token", res.body.refresh_token);
   }
 }
 

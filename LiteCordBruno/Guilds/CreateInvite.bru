@@ -1,0 +1,20 @@
+meta {
+  name: CreateInvite
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{rocket_url}}:{{rocket_port}}/guilds/{{guild_id}}/invites
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

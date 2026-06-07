@@ -1,0 +1,89 @@
+use crate::models::user::AuthenticatedUser;
+use crate::roles::{assign_role, create_role, delete_role, list_roles, remove_role};
+use rocket::http::Status;
+use rocket::serde::json::Json;
+use rocket::{State, delete, get, post};
+use serde::Deserialize;
+use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
+
+#[derive(Deserialize)]
+#[serde(crate = "rocket::serde")]
+pub struct CreateRoleRequest {
+    pub name: String,
+    pub color: String,
+    pub position: i32,
+    pub permissions: Vec<String>,
+}
+
+#[post("/<guild_id>/roles", rank = 2, format = "json", data = "<body>")]
+pub async fn create_role_route(
+    token: AuthenticatedUser,
+    guild_id: String,
+    body: Json<CreateRoleRequest>,
+    db: &State<Surreal<Any>>,
+) -> Result<(Status, String), (Status, String)> {
+    let body = body.into_inner();
+    match create_role(db, &guild_id, &token.user_id, body.name, body.color, body.position, body.permissions).await {
+        Ok(role) => {
+            let json = serde_json::to_string(&role)
+                .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+            Ok((Status::Created, json))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[get("/<guild_id>/roles")]
+pub async fn list_roles_route(
+    _token: AuthenticatedUser,
+    guild_id: String,
+    db: &State<Surreal<Any>>,
+) -> Result<(Status, String), (Status, String)> {
+    match list_roles(db, &guild_id).await {
+        Ok(roles) => {
+            let json = serde_json::to_string(&roles)
+                .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+            Ok((Status::Ok, json))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[delete("/<guild_id>/roles/<role_id>")]
+pub async fn delete_role_route(
+    token: AuthenticatedUser,
+    guild_id: String,
+    role_id: String,
+    db: &State<Surreal<Any>>,
+) -> Result<Status, (Status, String)> {
+    delete_role(db, &guild_id, &role_id, &token.user_id)
+        .await
+        .map(|_| Status::NoContent)
+}
+
+#[post("/<guild_id>/members/<target_user_id>/roles/<role_id>")]
+pub async fn assign_role_route(
+    token: AuthenticatedUser,
+    guild_id: String,
+    target_user_id: String,
+    role_id: String,
+    db: &State<Surreal<Any>>,
+) -> Result<Status, (Status, String)> {
+    assign_role(db, &guild_id, &role_id, &target_user_id, &token.user_id)
+        .await
+        .map(|_| Status::NoContent)
+}
+
+#[delete("/<guild_id>/members/<target_user_id>/roles/<role_id>")]
+pub async fn remove_role_route(
+    token: AuthenticatedUser,
+    guild_id: String,
+    target_user_id: String,
+    role_id: String,
+    db: &State<Surreal<Any>>,
+) -> Result<Status, (Status, String)> {
+    remove_role(db, &guild_id, &role_id, &target_user_id, &token.user_id)
+        .await
+        .map(|_| Status::NoContent)
+}

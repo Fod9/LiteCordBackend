@@ -1,0 +1,20 @@
+meta {
+  name: ListGuilds
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{rocket_url}}:{{rocket_port}}/guilds/
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

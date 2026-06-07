@@ -1,0 +1,20 @@
+meta {
+  name: GetMyInfo
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{rocket_url}}:{{rocket_port}}/auth/me
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

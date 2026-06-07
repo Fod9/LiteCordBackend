@@ -5,21 +5,18 @@ meta {
 }
 
 ws {
-  url: ws://{{rocket_domain}}:{{rocket_port}}/ws/
+  url: ws://{{rocket_domain}}:{{rocket_port}}/ws/?token={{token}}
   body: ws
-  auth: bearer
-}
-
-auth:bearer {
-  token: eyJhbGciOiJIUzM4NCJ9.eyJpYXQiOiIxNzc0MTgzOTA3IiwidHlwZSI6ImFjY2VzcyIsInVzZXJfaWQiOiJ1c2VyOjFibzhtc3dvZGp6eWJ0aXl4Zmt3In0.21RJyXJg4ujJW_9-2DWmxelHAjlN7S813-j98pWfYk9H8rhG6VUeftZtidrVf00N
+  auth: none
 }
 
 body:ws {
-  name: message 1
+  name: Send message
   type: json
   content: '''
     {
-      "to": "user:sk7kovujly5dojd2ufoz",
+      "to": "user:<target_user_id>",
+      "message_type": "text",
       "content": "Salut"
     }
   '''

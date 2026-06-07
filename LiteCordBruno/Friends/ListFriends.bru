@@ -1,0 +1,20 @@
+meta {
+  name: ListFriends
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{rocket_url}}:{{rocket_port}}/friends/list_friends
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

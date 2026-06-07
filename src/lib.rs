@@ -1,8 +1,14 @@
 pub mod chat;
+pub mod channels;
 pub mod error;
+pub mod friends;
+pub mod guild_channels;
+pub mod guilds;
 pub mod hashing;
 pub mod jwt;
+pub mod messages;
 pub mod models;
+pub mod roles;
 pub mod routes;
 pub mod users;
 
@@ -40,15 +46,13 @@ pub mod db {
     use std::fs;
     use surrealdb::{
         Surreal,
-        engine::remote::ws::{Client, Ws},
+        engine::any::Any,
         opt::auth::Root,
     };
 
-    pub async fn init_db() -> Result<Surreal<Client>, surrealdb::Error> {
-        let database_instance: Surreal<Client> = Surreal::init();
+    pub async fn init_db() -> Result<Surreal<Any>, surrealdb::Error> {
         let config = get_config();
-
-        database_instance.connect::<Ws>(&config.db_url).await?;
+        let database_instance = surrealdb::engine::any::connect(format!("ws://{}", &config.db_url)).await?;
 
         database_instance
             .signin(Root {
@@ -64,6 +68,15 @@ pub mod db {
 
         let schema =
             fs::read_to_string(&config.db_config_file).expect("Failed to read schema file");
+
+        let mut response = database_instance.query(&schema).await?;
+        let num_statements = response.num_statements();
+
+        for i in 0..num_statements {
+            if let Err(e) = response.take::<surrealdb::Value>(i) {
+                eprintln!("Schema statement {} failed: {:?}", i, e);
+            }
+        }
 
         database_instance.query(&schema).await?;
 

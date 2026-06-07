@@ -9,7 +9,7 @@ use jwt::{AlgorithmType, Header, SignWithKey, Token, token::Signed};
 
 use sha2::Sha384;
 use std::collections::BTreeMap;
-use surrealdb::{Surreal, engine::remote::ws::Client, sql::Thing};
+use surrealdb::{Surreal, engine::any::Any, sql::Thing};
 
 pub type SignedToken = Token<Header, BTreeMap<String, String>, Signed>;
 
@@ -96,7 +96,7 @@ pub fn decode_token(token: &str) -> Result<TokenClaims, Box<dyn std::error::Erro
 pub async fn check_if_refresh_token_in_db(
     jwt: String,
     user_id: &Thing,
-    db: &Surreal<Client>,
+    db: &Surreal<Any>,
 ) -> bool {
     let result = db
         .query("SELECT * FROM RefreshToken WHERE user = $user")
@@ -119,7 +119,7 @@ pub async fn check_if_refresh_token_in_db(
 pub async fn store_refresh_token_in_db(
     jwt: &str,
     user_id: &Thing,
-    db: &Surreal<Client>,
+    db: &Surreal<Any>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let encrypted_token = encrypt_aes_refresh_token(jwt)?;
     db.query("CREATE RefreshToken SET token = $token_str, user = $user")
@@ -132,7 +132,7 @@ pub async fn store_refresh_token_in_db(
 pub async fn delete_refresh_token_from_db(
     jwt: &str,
     user_id: &Thing,
-    db: &Surreal<Client>,
+    db: &Surreal<Any>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let result = db
         .query("SELECT * FROM RefreshToken WHERE user = $user")
@@ -190,4 +190,70 @@ pub fn decrypt_aes_refresh_token(
         .decrypt(nonce, ciphertext)
         .map_err(|e| format!("Decryption failed {e}"))?;
     Ok(String::from_utf8(decrypted_data)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use surrealdb::sql::Thing;
+
+    fn setup_env() {
+        unsafe {
+            std::env::set_var("ROCKET_JWT_SECRET", "test_secret_key_for_litecord_tests_only");
+            std::env::set_var("ROCKET_AES_KEY", "litecord_test_aes_key_32_bytes!!");
+            std::env::set_var("ROCKET_TOKEN_EXPIRATION_SECONDS", "3600");
+            std::env::set_var("ROCKET_REFRESH_TOKEN_EXPIRATION_SECONDS", "604800");
+            std::env::set_var("ROCKET_DB_URL", "localhost:8000");
+            std::env::set_var("ROCKET_DB_USER", "root");
+            std::env::set_var("ROCKET_DB_PASSWORD", "root");
+            std::env::set_var("ROCKET_DB_CONFIG_FILE", "db.surql");
+        }
+    }
+
+    fn test_user_thing() -> Thing {
+        surrealdb::sql::thing("user:test123").unwrap()
+    }
+
+    #[test]
+    fn generate_and_decode_access_token() {
+        setup_env();
+        let user_id = test_user_thing();
+        let token = generate_jwt(&user_id, "access".to_string()).unwrap();
+        let claims = decode_token(token.as_str()).unwrap();
+        assert_eq!(claims.token_type, "access");
+        assert!(claims.user_id.contains("test123"));
+    }
+
+    #[test]
+    fn generate_and_decode_refresh_token() {
+        setup_env();
+        let user_id = test_user_thing();
+        let token = generate_jwt(&user_id, "refresh".to_string()).unwrap();
+        let claims = decode_token(token.as_str()).unwrap();
+        assert_eq!(claims.token_type, "refresh");
+    }
+
+    #[test]
+    fn decode_tampered_token_fails() {
+        setup_env();
+        let result = decode_token("this.is.not.a.valid.jwt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn encrypt_then_decrypt_roundtrip() {
+        setup_env();
+        let original = "some.jwt.token.string";
+        let encrypted = encrypt_aes_refresh_token(original).unwrap();
+        let decrypted = decrypt_aes_refresh_token(&encrypted).unwrap();
+        assert_eq!(decrypted, original);
+    }
+
+    #[test]
+    fn two_encryptions_of_same_value_differ() {
+        setup_env();
+        let enc_a = encrypt_aes_refresh_token("same_token").unwrap();
+        let enc_b = encrypt_aes_refresh_token("same_token").unwrap();
+        assert_ne!(enc_a, enc_b, "nonces must make ciphertexts unique");
+    }
 }

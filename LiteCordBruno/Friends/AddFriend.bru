@@ -1,0 +1,20 @@
+meta {
+  name: AddFriend
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{rocket_url}}:{{rocket_port}}/friends/add_friend/FoD9
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

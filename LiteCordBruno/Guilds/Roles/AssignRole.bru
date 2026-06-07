@@ -1,0 +1,20 @@
+meta {
+  name: AssignRole
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{rocket_url}}:{{rocket_port}}/guilds/{{guild_id}}/members/{{user_id}}/roles/{{role_id}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

@@ -1,18 +1,18 @@
 use crate::hashing::hash_password;
 use crate::jwt;
-use crate::models::db::User;
+use crate::models::db::{SimpleUser, User};
 use crate::models::user::{CreateUser, LoginSuccess, LoginUser};
 use chrono::prelude::*;
 use rocket::http::Status;
 use rocket::{State, serde::json::Json};
 use surrealdb::Surreal;
-use surrealdb::engine::remote::ws::Client;
+use surrealdb::engine::any::Any;
 use surrealdb::sql::Datetime;
 use surrealdb::sql::Thing;
 
 pub async fn signup(
     user_json: Json<CreateUser>,
-    db: &State<Surreal<Client>>,
+    db: &State<Surreal<Any>>,
 ) -> Result<(Status, Json<LoginSuccess>), (Status, String)> {
     let user = user_json.into_inner();
 
@@ -101,7 +101,7 @@ pub async fn signup(
 
 pub async fn signin(
     user_json: Json<LoginUser>,
-    db: &State<Surreal<Client>>,
+    db: &State<Surreal<Any>>,
 ) -> Result<(Status, Json<LoginSuccess>), (Status, String)> {
     let user = user_json.into_inner();
 
@@ -166,7 +166,7 @@ pub async fn signin(
 
 pub async fn refresh_token(
     refresh_token: String,
-    db: &Surreal<Client>,
+    db: &Surreal<Any>,
 ) -> Result<(Status, Json<LoginSuccess>), (Status, String)> {
     let token_data = jwt::decode_token(&refresh_token).map_err(|_| {
         (
@@ -230,4 +230,31 @@ pub async fn refresh_token(
             refresh_token: new_refresh_token_str,
         }),
     ))
+}
+
+pub async fn get_my_info(
+    token: String,
+    db: &Surreal<Any>,
+) -> Result<(Status, String), (Status, String)> {
+    let token_data = jwt::decode_token(&token)
+        .map_err(|_| (Status::Unauthorized, "Token d'accès invalide".to_string()))?;
+
+    let user_id_str = token_data.user_id.clone();
+    let user_id: Thing = user_id_str
+        .parse()
+        .map_err(|_| (Status::Unauthorized, "user_id malformé".to_string()))?;
+
+    let user_info: Option<SimpleUser> = db
+        .query("SELECT name, email, id, display_name, profile_picture FROM user WHERE id = $id")
+        .bind(("id", user_id.clone()))
+        .await
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?
+        .take(0)
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+
+    if let Some(user) = user_info {
+        Ok((Status::Ok, serde_json::to_string(&user).unwrap_or_default()))
+    } else {
+        Err((Status::NotFound, "Utilisateur non trouvé".to_string()))
+    }
 }

@@ -1,0 +1,20 @@
+meta {
+  name: LeaveGuild
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{rocket_url}}:{{rocket_port}}/guilds/{{guild_id}}/leave
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

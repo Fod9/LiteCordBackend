@@ -12,35 +12,43 @@ use rocket_ws::stream::DuplexStream;
 use rocket_ws::{self, Channel, Message, WebSocket};
 use std::sync::Arc;
 use surrealdb::Surreal;
-use surrealdb::engine::remote::ws::Client;
+use surrealdb::engine::any::Any;
 
 struct AuthenticatedSession {
     user_id: String,
     token: String,
 }
 
-#[get("/")]
+#[get("/?<token>")]
 pub fn websocket_index(
     ws: WebSocket,
     hub: &State<Arc<ChatHub>>,
-    db: &State<Surreal<Client>>,
+    db: &State<Surreal<Any>>,
+    token: Option<String>,
 ) -> Channel<'static> {
     let hub = hub.inner().clone();
     let db = db.inner().clone();
 
     ws.channel(move |mut stream| {
         Box::pin(async move {
-            let Some(mut session) = authenticate(&mut stream).await? else {
+            let Some(mut session) = authenticate(&mut stream, token.as_deref()).await? else {
                 return Ok(());
             };
 
             let mut rx = register_user(&hub, &session.user_id).await;
 
-            send_json(&mut stream, r#"{"status":"authenticated"}"#).await?;
+            let friends_online = hub.broadcast_presence(&db, &session.user_id, true).await;
+            let auth_response = serde_json::json!({
+                "status": "authenticated",
+                "friends_online": friends_online,
+            })
+            .to_string();
+            send_json(&mut stream, &auth_response).await?;
 
             run_message_loop(&mut stream, &mut rx, &hub, &db, &mut session).await?;
 
             disconnect_user(&hub, &session.user_id).await;
+            hub.broadcast_presence(&db, &session.user_id, false).await;
 
             Ok(())
         })
@@ -49,7 +57,20 @@ pub fn websocket_index(
 
 async fn authenticate(
     stream: &mut DuplexStream,
+    query_token: Option<&str>,
 ) -> Result<Option<AuthenticatedSession>, rocket_ws::result::Error> {
+    if let Some(token) = query_token {
+        let session = decode_token(token).ok().map(|claims| AuthenticatedSession {
+            user_id: claims.user_id,
+            token: token.to_string(),
+        });
+        if let Some(s) = session {
+            return Ok(Some(s));
+        }
+        send_json(stream, r#"{"error":"invalid token"}"#).await?;
+        return Ok(None);
+    }
+
     loop {
         match stream.next().await {
             Some(Ok(Message::Text(text))) => match serde_json::from_str::<AuthMessage>(&text) {
@@ -89,7 +110,7 @@ async fn run_message_loop(
     stream: &mut DuplexStream,
     rx: &mut broadcast::Receiver<String>,
     hub: &Arc<ChatHub>,
-    db: &Surreal<Client>,
+    db: &Surreal<Any>,
     session: &mut AuthenticatedSession,
 ) -> Result<(), rocket_ws::result::Error> {
     let mut auth_check = interval(Duration::from_secs(300));
@@ -99,7 +120,7 @@ async fn run_message_loop(
             Some(msg) = stream.next() => {
                 match msg? {
                     Message::Text(text) => {
-                        handle_incoming_message(db, &text, &session.user_id, hub).await;
+                        handle_incoming_message(stream, db, &text, &session.user_id, hub).await?;
                     }
                     Message::Close(_) => break,
                     _ => {}
@@ -120,29 +141,27 @@ async fn run_message_loop(
 }
 
 async fn handle_incoming_message(
-    db: &Surreal<Client>,
+    stream: &mut DuplexStream,
+    db: &Surreal<Any>,
     text: &str,
     sender_id: &str,
     hub: &Arc<ChatHub>,
-) {
+) -> Result<(), rocket_ws::result::Error> {
     match serde_json::from_str::<ChatMessage>(text) {
         Ok(mut chat_msg) => {
             chat_msg.from = Some(sender_id.to_string());
-            let conns = hub.connections.read().await;
-            ChatHub::send_to(hub, db, &chat_msg).await;
-            if let Some(target_tx) = conns.get(&chat_msg.to) {
-                if let Ok(json) = serde_json::to_string(&chat_msg) {
-                    let _ = target_tx.send(json);
-                }
-            }
+            ChatHub::send_to(hub, db, &mut chat_msg).await;
         }
-        Err(e) => println!("Parse error: {e}"),
+        Err(_) => {
+            send_json(stream, r#"{"error":"invalid message format, expected: {\"to\": \"string\", \"message_type\": \"string\", \"content\": \"string\"}"#).await?;
+        }
     }
+    Ok(())
 }
 
 async fn handle_token_refresh(
     stream: &mut DuplexStream,
-    db: &Surreal<Client>,
+    db: &Surreal<Any>,
     session: &mut AuthenticatedSession,
 ) -> Result<bool, rocket_ws::result::Error> {
     if decode_token(&session.token).is_ok() {

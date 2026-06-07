@@ -1,0 +1,28 @@
+meta {
+  name: CreateChannel
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{rocket_url}}:{{rocket_port}}/guilds/{{guild_id}}/channels
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "général",
+    "channel_type": "Text",
+    "category": null
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

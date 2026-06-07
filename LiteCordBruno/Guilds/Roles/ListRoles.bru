@@ -1,0 +1,20 @@
+meta {
+  name: ListRoles
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{rocket_url}}:{{rocket_port}}/guilds/{{guild_id}}/roles
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

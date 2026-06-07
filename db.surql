@@ -40,13 +40,15 @@ DEFINE TABLE channel SCHEMAFULL;
 
     DEFINE INDEX channel_guild   ON TABLE channel COLUMNS guild;
 
-DEFINE TABLE dm_channel SCHEMAFULL;
-    DEFINE FIELD name            ON TABLE dm_channel TYPE option<string>;
-    DEFINE FIELD owner           ON TABLE dm_channel TYPE record<user>;
-    DEFINE FIELD last_message_id ON TABLE dm_channel TYPE option<record<message>>;
-    DEFINE FIELD created_at      ON TABLE dm_channel TYPE datetime DEFAULT time::now();
-    DEFINE FIELD recipients      ON TABLE dm_channel TYPE array;
-    DEFINE FIELD recipients.* ON TABLE dm_channel TYPE record<user>;
+DEFINE TABLE DMChannel SCHEMAFULL;
+    DEFINE FIELD name            ON TABLE DMChannel TYPE option<string>;
+    DEFINE FIELD owner           ON TABLE DMChannel TYPE record<user>;
+    DEFINE FIELD last_message_id ON TABLE DMChannel TYPE option<record<message>>;
+    DEFINE FIELD created_at      ON TABLE DMChannel TYPE datetime DEFAULT time::now();
+    DEFINE FIELD recipients      ON TABLE DMChannel TYPE array;
+    DEFINE FIELD recipients.*    ON TABLE DMChannel TYPE record<user>;
+    DEFINE FIELD recipients_key  ON TABLE DMChannel TYPE string;
+    DEFINE INDEX dm_recipients_unique ON TABLE DMChannel FIELDS recipients_key UNIQUE;
 
 DEFINE TABLE guild_invite SCHEMAFULL;
     DEFINE FIELD guild           ON TABLE guild_invite TYPE record<guild>;
@@ -67,7 +69,7 @@ DEFINE TABLE emoji SCHEMAFULL;
     DEFINE INDEX emoji_guild     ON TABLE emoji COLUMNS guild;
 
 DEFINE TABLE message SCHEMAFULL;
-    DEFINE FIELD channel         ON TABLE message TYPE record<channel | dm_channel>;
+    DEFINE FIELD channel         ON TABLE message TYPE record<channel | DMChannel>;
     DEFINE FIELD author          ON TABLE message TYPE record<user>;
     DEFINE FIELD content         ON TABLE message TYPE string;
     DEFINE FIELD reply_to        ON TABLE message TYPE option<record<message>>;
@@ -91,5 +93,6 @@ DEFINE TABLE member_of SCHEMAFULL TYPE RELATION IN user OUT guild;
 
 DEFINE TABLE friendship SCHEMAFULL TYPE RELATION IN user OUT user;
     DEFINE FIELD created_at      ON TABLE friendship TYPE datetime DEFAULT time::now();
+    DEFINE FIELD status          ON TABLE friendship TYPE string ASSERT $value INSIDE ['pending', 'accepted', 'rejected'];
 
     DEFINE INDEX unique_friendship ON TABLE friendship COLUMNS in, out UNIQUE;

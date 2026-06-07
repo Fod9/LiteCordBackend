@@ -1,0 +1,29 @@
+meta {
+  name: CreateRole
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{rocket_url}}:{{rocket_port}}/guilds/{{guild_id}}/roles
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "Modérateur",
+    "color": "#ff0000",
+    "position": 1,
+    "permissions": ["kick_members", "manage_channels"]
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

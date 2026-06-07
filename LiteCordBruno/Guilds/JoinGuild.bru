@@ -1,0 +1,20 @@
+meta {
+  name: JoinGuild
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{rocket_url}}:{{rocket_port}}/guilds/join/{{invite_code}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

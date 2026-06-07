@@ -1,0 +1,26 @@
+meta {
+  name: CreateDmChannel
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{rocket_url}}:{{rocket_port}}/channels/dm
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "recipient_ids": ["user:<target_user_id>"]
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

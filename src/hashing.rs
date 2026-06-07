@@ -21,3 +21,27 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, argon2::passw
         Err(e) => Err(e),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_and_verify_correct_password() {
+        let hash = hash_password("my_secure_password").unwrap();
+        assert!(verify_password("my_secure_password", &hash).unwrap());
+    }
+
+    #[test]
+    fn verify_wrong_password_returns_false() {
+        let hash = hash_password("correct_password").unwrap();
+        assert!(!verify_password("wrong_password", &hash).unwrap());
+    }
+
+    #[test]
+    fn two_hashes_of_same_password_differ() {
+        let hash_a = hash_password("same_password").unwrap();
+        let hash_b = hash_password("same_password").unwrap();
+        assert_ne!(hash_a, hash_b, "salts must make hashes unique");
+    }
+}

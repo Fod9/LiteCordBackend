@@ -1,0 +1,20 @@
+meta {
+  name: RemoveFriend
+  type: http
+  seq: 5
+}
+
+delete {
+  url: {{rocket_url}}:{{rocket_port}}/friends/{{friendship_id}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

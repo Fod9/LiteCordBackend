@@ -1,0 +1,20 @@
+meta {
+  name: GetMessages
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{rocket_url}}:{{rocket_port}}/channels/{{channel_id}}/messages?limit=50
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}
