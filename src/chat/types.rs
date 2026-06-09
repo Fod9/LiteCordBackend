@@ -1,3 +1,4 @@
+use crate::models::db::Attachment;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -6,6 +7,8 @@ pub struct ChatMessage {
     pub message_type: String,
     pub from: Option<String>,
     pub content: String,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 #[derive(Serialize, Deserialize)]

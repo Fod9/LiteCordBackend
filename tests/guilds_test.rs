@@ -1,7 +1,8 @@
 mod common;
 
 use litecord_backend::guilds::{
-    create_guild, create_invite, delete_guild, join_guild, leave_guild, list_user_guilds,
+    create_guild, create_invite, delete_guild, join_guild, kick_member, leave_guild,
+    list_guild_invites, list_guild_members, list_user_guilds, revoke_invite, update_guild,
 };
 
 #[tokio::test]
@@ -169,6 +170,182 @@ async fn already_member_cannot_join_again() {
     let invite2 = create_invite(&db, &guild_id, &owner_id.to_raw()).await.unwrap();
     let result = join_guild(&db, &invite2.code, &joiner_id.to_raw()).await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn list_guild_members_returns_owner_and_members() {
+    let db = common::setup_db().await;
+    let owner_id = common::create_test_user(&db, "ownerM1", "ownerM1@test.com").await;
+    let member_id = common::create_test_user(&db, "memberM1", "memberM1@test.com").await;
+
+    let guild = create_guild(&db, &owner_id.to_raw(), "GuildM1".to_string(), "".to_string())
+        .await
+        .unwrap();
+    let guild_id = guild.id.unwrap().to_raw();
+
+    let invite = create_invite(&db, &guild_id, &owner_id.to_raw()).await.unwrap();
+    join_guild(&db, &invite.code, &member_id.to_raw()).await.unwrap();
+
+    let members = list_guild_members(&db, &guild_id, &owner_id.to_raw())
+        .await
+        .expect("list_guild_members failed");
+
+    assert_eq!(members.len(), 2);
+    let names: Vec<&str> = members.iter().map(|m| m.user.name.as_str()).collect();
+    assert!(names.contains(&"ownerM1"));
+    assert!(names.contains(&"memberM1"));
+}
+
+#[tokio::test]
+async fn list_guild_members_requires_membership() {
+    let db = common::setup_db().await;
+    let owner_id = common::create_test_user(&db, "ownerM2", "ownerM2@test.com").await;
+    let outsider_id = common::create_test_user(&db, "outsiderM2", "outsiderM2@test.com").await;
+
+    let guild = create_guild(&db, &owner_id.to_raw(), "GuildM2".to_string(), "".to_string())
+        .await
+        .unwrap();
+    let guild_id = guild.id.unwrap().to_raw();
+
+    let result = list_guild_members(&db, &guild_id, &outsider_id.to_raw()).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn kick_member_removes_from_guild() {
+    let db = common::setup_db().await;
+    let owner_id = common::create_test_user(&db, "ownerK1", "ownerK1@test.com").await;
+    let member_id = common::create_test_user(&db, "memberK1", "memberK1@test.com").await;
+
+    let guild = create_guild(&db, &owner_id.to_raw(), "GuildK1".to_string(), "".to_string())
+        .await
+        .unwrap();
+    let guild_id = guild.id.unwrap().to_raw();
+
+    let invite = create_invite(&db, &guild_id, &owner_id.to_raw()).await.unwrap();
+    join_guild(&db, &invite.code, &member_id.to_raw()).await.unwrap();
+
+    kick_member(&db, &guild_id, &member_id.to_raw(), &owner_id.to_raw())
+        .await
+        .expect("kick_member failed");
+
+    let guilds = list_user_guilds(&db, &member_id.to_raw()).await.unwrap();
+    assert!(guilds.is_empty());
+}
+
+#[tokio::test]
+async fn kick_member_by_non_owner_fails() {
+    let db = common::setup_db().await;
+    let owner_id = common::create_test_user(&db, "ownerK2", "ownerK2@test.com").await;
+    let member_id = common::create_test_user(&db, "memberK2", "memberK2@test.com").await;
+    let other_id = common::create_test_user(&db, "otherK2", "otherK2@test.com").await;
+
+    let guild = create_guild(&db, &owner_id.to_raw(), "GuildK2".to_string(), "".to_string())
+        .await
+        .unwrap();
+    let guild_id = guild.id.unwrap().to_raw();
+
+    let invite = create_invite(&db, &guild_id, &owner_id.to_raw()).await.unwrap();
+    join_guild(&db, &invite.code, &member_id.to_raw()).await.unwrap();
+
+    let result = kick_member(&db, &guild_id, &member_id.to_raw(), &other_id.to_raw()).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn update_guild_name_by_owner() {
+    let db = common::setup_db().await;
+    let owner_id = common::create_test_user(&db, "ownerU1", "ownerU1@test.com").await;
+
+    let guild = create_guild(&db, &owner_id.to_raw(), "OldName".to_string(), "".to_string())
+        .await
+        .unwrap();
+    let guild_id = guild.id.unwrap().to_raw();
+
+    let updated = update_guild(&db, &guild_id, &owner_id.to_raw(), Some("NewName".to_string()), None)
+        .await
+        .expect("update_guild failed");
+
+    assert_eq!(updated.name, "NewName");
+}
+
+#[tokio::test]
+async fn update_guild_by_non_owner_fails() {
+    let db = common::setup_db().await;
+    let owner_id = common::create_test_user(&db, "ownerU2", "ownerU2@test.com").await;
+    let other_id = common::create_test_user(&db, "otherU2", "otherU2@test.com").await;
+
+    let guild = create_guild(&db, &owner_id.to_raw(), "Guild".to_string(), "".to_string())
+        .await
+        .unwrap();
+    let guild_id = guild.id.unwrap().to_raw();
+
+    let result = update_guild(&db, &guild_id, &other_id.to_raw(), Some("Hack".to_string()), None).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn list_guild_invites_returns_all_invites() {
+    let db = common::setup_db().await;
+    let owner_id = common::create_test_user(&db, "ownerI1", "ownerI1@test.com").await;
+
+    let guild = create_guild(&db, &owner_id.to_raw(), "GuildI1".to_string(), "".to_string())
+        .await
+        .unwrap();
+    let guild_id = guild.id.unwrap().to_raw();
+
+    create_invite(&db, &guild_id, &owner_id.to_raw()).await.unwrap();
+    create_invite(&db, &guild_id, &owner_id.to_raw()).await.unwrap();
+
+    let invites = list_guild_invites(&db, &guild_id, &owner_id.to_raw())
+        .await
+        .expect("list_guild_invites failed");
+
+    assert_eq!(invites.len(), 2);
+}
+
+#[tokio::test]
+async fn revoke_invite_removes_it() {
+    let db = common::setup_db().await;
+    let owner_id = common::create_test_user(&db, "ownerI2", "ownerI2@test.com").await;
+
+    let guild = create_guild(&db, &owner_id.to_raw(), "GuildI2".to_string(), "".to_string())
+        .await
+        .unwrap();
+    let guild_id = guild.id.unwrap().to_raw();
+
+    let invite = create_invite(&db, &guild_id, &owner_id.to_raw()).await.unwrap();
+    let invite_id = invite.id.unwrap().to_raw();
+
+    revoke_invite(&db, &guild_id, &invite_id, &owner_id.to_raw())
+        .await
+        .expect("revoke_invite failed");
+
+    let invites = list_guild_invites(&db, &guild_id, &owner_id.to_raw()).await.unwrap();
+    assert!(invites.is_empty());
+}
+
+#[tokio::test]
+async fn delete_guild_returns_member_ids() {
+    let db = common::setup_db().await;
+    let owner_id = common::create_test_user(&db, "ownerDR1", "ownerDR1@test.com").await;
+    let member_id = common::create_test_user(&db, "memberDR1", "memberDR1@test.com").await;
+
+    let guild = create_guild(&db, &owner_id.to_raw(), "ToDeleteR".to_string(), "".to_string())
+        .await
+        .unwrap();
+    let guild_id = guild.id.unwrap().to_raw();
+
+    let invite = create_invite(&db, &guild_id, &owner_id.to_raw()).await.unwrap();
+    join_guild(&db, &invite.code, &member_id.to_raw()).await.unwrap();
+
+    let member_ids = delete_guild(&db, &guild_id, &owner_id.to_raw())
+        .await
+        .expect("delete_guild failed");
+
+    assert_eq!(member_ids.len(), 2);
+    assert!(member_ids.contains(&owner_id.to_raw()));
+    assert!(member_ids.contains(&member_id.to_raw()));
 }
 
 #[tokio::test]

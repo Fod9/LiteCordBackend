@@ -64,6 +64,18 @@ pub async fn create_test_user(db: &Surreal<Any>, name: &str, email: &str) -> sur
     created.unwrap().id.unwrap()
 }
 
+pub async fn create_accepted_friendship(
+    db: &Surreal<Any>,
+    user_a: &surrealdb::sql::Thing,
+    user_b: &surrealdb::sql::Thing,
+) {
+    db.query("RELATE $a->friendship->$b SET status = 'accepted'")
+        .bind(("a", user_a.clone()))
+        .bind(("b", user_b.clone()))
+        .await
+        .unwrap();
+}
+
 pub async fn create_test_dm_channel(db: &Surreal<Any>, user_id: &surrealdb::sql::Thing) -> String {
     use litecord_backend::models::db::DMChannel;
 

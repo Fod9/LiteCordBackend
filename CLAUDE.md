@@ -123,6 +123,20 @@ Write tests before or alongside each new function. The test suite uses SurrealDB
 
 New HTTP routes don't need Rocket integration tests — test the underlying business logic function directly (the route is just a thin wrapper).
 
+## Documentation Obligations
+
+After any change involving routes or WebSocket behavior, you **must** update the following:
+
+### API.md
+- **New route**: add a full entry (method, path, auth, request body, response body + status code)
+- **Modified input/output**: update the affected entry
+- **New WS server event**: document the event under the WebSocket section (event name, `content` shape, when it's emitted)
+
+### Bruno (`LiteCordBruno/`)
+- **New route**: create a `.bru` file in the matching folder (mirror the folder structure: `Auth/`, `Guilds/`, `Channels/`, etc.)
+- **Modified request body or URL params**: update the corresponding `.bru` file
+- WS-only changes (no HTTP route added or modified) do not require a Bruno file
+
 ## Code Conventions
 
 - No inline comments; standard comments only for genuinely complex logic

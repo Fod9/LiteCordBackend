@@ -1,6 +1,6 @@
 mod common;
 
-use litecord_backend::friends::{add_friend, list_friends, list_pending_requests, remove_friend, update_friend_request};
+use litecord_backend::friends::{add_friend, are_accepted_friends, list_friends, list_pending_requests, remove_friend, update_friend_request};
 use litecord_backend::models::db::{Friendship, FriendshipWithUsers};
 
 #[tokio::test]
@@ -213,6 +213,45 @@ async fn remove_friend_by_uninvolved_user_fails() {
     assert!(result.is_err());
     let (status, _) = result.unwrap_err();
     assert_eq!(status, rocket::http::Status::Forbidden);
+}
+
+#[tokio::test]
+async fn are_accepted_friends_returns_true_when_accepted() {
+    let db = common::setup_db().await;
+    let user_a = common::create_test_user(&db, "frchk_a", "frchk_a@test.com").await;
+    let user_b = common::create_test_user(&db, "frchk_b", "frchk_b@test.com").await;
+    common::create_accepted_friendship(&db, &user_a, &user_b).await;
+
+    assert!(are_accepted_friends(&db, &user_a.to_raw(), &user_b.to_raw()).await);
+}
+
+#[tokio::test]
+async fn are_accepted_friends_returns_true_in_reverse_direction() {
+    let db = common::setup_db().await;
+    let user_a = common::create_test_user(&db, "frchk_c", "frchk_c@test.com").await;
+    let user_b = common::create_test_user(&db, "frchk_d", "frchk_d@test.com").await;
+    common::create_accepted_friendship(&db, &user_a, &user_b).await;
+
+    assert!(are_accepted_friends(&db, &user_b.to_raw(), &user_a.to_raw()).await);
+}
+
+#[tokio::test]
+async fn are_accepted_friends_returns_false_when_pending() {
+    let db = common::setup_db().await;
+    let user_a = common::create_test_user(&db, "frchk_e", "frchk_e@test.com").await;
+    let user_b = common::create_test_user(&db, "frchk_f", "frchk_f@test.com").await;
+    add_friend(user_a.to_raw(), "frchk_f".to_string(), &db).await.unwrap();
+
+    assert!(!are_accepted_friends(&db, &user_a.to_raw(), &user_b.to_raw()).await);
+}
+
+#[tokio::test]
+async fn are_accepted_friends_returns_false_when_no_relation() {
+    let db = common::setup_db().await;
+    let user_a = common::create_test_user(&db, "frchk_g", "frchk_g@test.com").await;
+    let user_b = common::create_test_user(&db, "frchk_h", "frchk_h@test.com").await;
+
+    assert!(!are_accepted_friends(&db, &user_a.to_raw(), &user_b.to_raw()).await);
 }
 
 #[tokio::test]

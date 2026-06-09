@@ -1,7 +1,8 @@
 use crate::chat::types::{ChatMessage, PresenceEvent, ServerMessage};
+use crate::friends::are_accepted_friends;
 use crate::guild_channels::get_guild_member_ids;
-use crate::messages::save_message;
-use crate::models::db::DMChannel;
+use crate::messages::save_message_with_author;
+use crate::models::db::{DMChannel, MemberOf};
 use rocket::tokio::sync::RwLock;
 use rocket::tokio::sync::broadcast::Sender;
 use std::collections::HashMap;
@@ -125,6 +126,16 @@ impl ChatHub {
             return;
         };
 
+        if !are_accepted_friends(db, &sender_id, &target_id).await {
+            let error = serde_json::to_string(&ServerMessage {
+                message_type: "error".to_string(),
+                content: "you must be friends to send a direct message".to_string(),
+            })
+            .unwrap_or_default();
+            ChatHub::forward_to_client(hub, &sender_id, &error).await;
+            return;
+        }
+
         let get_dm = db
             .query("SELECT * FROM DMChannel WHERE recipients CONTAINSALL [$sender_id, $target_id] AND array::len(recipients) = 2")
             .bind(("sender_id", sender_thing))
@@ -210,7 +221,23 @@ impl ChatHub {
             match dm_result.take::<Vec<DMChannel>>(0) {
                 Ok(mut channels) => {
                     if let Some(channel) = channels.pop() {
-                        match save_message(db, &dm_channel_id, &sender_id, &message.content).await {
+                        for recipient in &channel.recipients {
+                            let recipient_id = recipient.to_raw();
+                            if recipient_id == sender_id {
+                                continue;
+                            }
+                            if !are_accepted_friends(db, &sender_id, &recipient_id).await {
+                                let error = serde_json::to_string(&ServerMessage {
+                                    message_type: "error".to_string(),
+                                    content: "you are no longer friends with all participants".to_string(),
+                                })
+                                .unwrap_or_default();
+                                ChatHub::forward_to_client(hub, &sender_id, &error).await;
+                                return;
+                            }
+                        }
+
+                        match save_message_with_author(db, &dm_channel_id, &sender_id, &message.content, message.attachments.clone()).await {
                             Ok(saved) => {
                                 if let Some(msg_id) = &saved.id {
                                     let _ = db
@@ -270,7 +297,7 @@ impl ChatHub {
             return;
         }
 
-        match save_message(db, &channel_id, &sender_id, &message.content).await {
+        match save_message_with_author(db, &channel_id, &sender_id, &message.content, message.attachments.clone()).await {
             Ok(saved) => {
                 let envelope = ServerMessage {
                     message_type: "new_message".to_string(),
@@ -299,6 +326,27 @@ impl ChatHub {
             "DMChannel" => ChatHub::send_to_dm_channel(hub, db, message).await,
             "channel" => ChatHub::send_to_channel(hub, db, message).await,
             other => println!("Unknown data type: {other}"),
+        }
+    }
+
+    pub async fn broadcast_to_guild_members(&self, db: &Surreal<Any>, guild_id: &str, payload: &str) {
+        let Ok(guild_thing) = surrealdb::sql::thing(guild_id) else { return; };
+
+        let memberships: Vec<MemberOf> = match db
+            .query("SELECT * FROM member_of WHERE out = $guild_id")
+            .bind(("guild_id", guild_thing))
+            .await
+        {
+            Ok(mut res) => res.take(0).unwrap_or_default(),
+            Err(_) => return,
+        };
+
+        let connections = self.connections.read().await;
+        for member in &memberships {
+            let member_id = member.user.to_raw();
+            if let Some(tx) = connections.get(&member_id) {
+                let _ = tx.send(payload.to_string());
+            }
         }
     }
 

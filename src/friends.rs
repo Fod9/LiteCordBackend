@@ -48,7 +48,7 @@ pub async fn add_friend(
     }
 
     let friendship: Option<Friendship> = db
-        .query("RELATE $user_a->friendship->$user_b SET status = 'pending'")
+        .query("RELATE $user_a->friendship->$user_b SET status = 'pending', created_at = time::now()")
         .bind(("user_a", user_thing))
         .bind(("user_b", target_id))
         .await
@@ -152,6 +152,25 @@ pub async fn list_friends(
         .map_err(|e| e.to_string())?;
 
     enrich_friendships(db, friendships).await
+}
+
+pub async fn are_accepted_friends(
+    db: &Surreal<Any>,
+    user_a: &str,
+    user_b: &str,
+) -> bool {
+    let Ok(thing_a) = surrealdb::sql::thing(user_a) else { return false; };
+    let Ok(thing_b) = surrealdb::sql::thing(user_b) else { return false; };
+
+    match db
+        .query("SELECT * FROM friendship WHERE ((`in` = $a AND out = $b) OR (`in` = $b AND out = $a)) AND status = 'accepted' LIMIT 1")
+        .bind(("a", thing_a))
+        .bind(("b", thing_b))
+        .await
+    {
+        Ok(mut res) => !res.take::<Vec<Friendship>>(0).unwrap_or_default().is_empty(),
+        Err(_) => false,
+    }
 }
 
 pub async fn remove_friend(

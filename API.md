@@ -93,6 +93,42 @@ Retourne les informations publiques de l'utilisateur connecté.
 
 ---
 
+## CDN — `/cdn`
+
+### `POST /cdn/presign` 🔒
+
+Génère une URL d'upload signée (valable 5 min). Le client upload ensuite **directement** vers RustFS via un PUT sur `upload_url`, sans passer par le backend.
+
+**Corps**
+```json
+{
+  "filename": "photo.jpg",
+  "content_type": "image/jpeg",
+  "size": 98765
+}
+```
+
+**Retour** `200`
+```json
+{
+  "upload_url": "https://s3.endpoint/bucket/uuid/photo.jpg?X-Amz-Signature=...",
+  "cdn_url": "https://cdn.tondomaine.com/uuid/photo.jpg"
+}
+```
+
+**Erreurs**
+- `400` — `filename` ou `content_type` absent
+- `413` — fichier dépasse 25 MB
+
+**Flow complet**
+```
+POST /cdn/presign  →  { upload_url, cdn_url }
+PUT  upload_url    →  200 (upload direct vers RustFS)
+WS / POST message  →  { content: "...", attachments: [{ url: cdn_url, filename, size }] }
+```
+
+---
+
 ## Channels — `/channels`
 
 ### `POST /channels/dm` 🔒
@@ -125,6 +161,7 @@ Le créateur (owner) est automatiquement ajouté aux participants.
 
 **Erreurs**
 - `400` — ID de destinataire invalide
+- `403` — l'appelant n'est pas ami (statut `accepted`) avec tous les destinataires
 - `404` — un ou plusieurs destinataires introuvables
 
 ---
@@ -175,7 +212,7 @@ Retourne l'historique de messages d'un channel (DMChannel ou channel de serveur)
 **Query params**
 | Paramètre | Type | Défaut | Description |
 |---|---|---|---|
-| `limit` | int | `50` | Nombre max de messages à retourner |
+| `limit` | int | `50` | Nombre max de messages à retourner (max 100) |
 | `before` | string | — | ID d'un message — retourne uniquement les messages plus anciens |
 
 **Retour** `200`
@@ -184,7 +221,12 @@ Retourne l'historique de messages d'un channel (DMChannel ou channel de serveur)
   {
     "id": "message:<id>",
     "channel": "DMChannel:<id> | channel:<id>",
-    "author": "user:<id>",
+    "author": {
+      "id": "user:<id>",
+      "name": "string",
+      "display_name": "string",
+      "profile_picture": "string"
+    },
     "content": "string",
     "reply_to": "message:<id> | null",
     "attachments": [
@@ -346,18 +388,10 @@ Supprime un serveur. Réservé au propriétaire. Supprime membres et invitations
 
 **Retour** `204`
 
----
-
-### `POST /guilds/<guild_id>/leave` 🔒
-
-Quitte un serveur. Le propriétaire ne peut pas quitter.
-
-**Paramètres URL**
-| Paramètre | Type | Description |
-|---|---|---|
-| `guild_id` | string | `guild:<id>` |
-
-**Retour** `204`
+**Notification WS** envoyée à tous les membres du serveur (y compris le propriétaire) :
+```json
+{ "message_type": "guild_deleted", "content": "guild:<id>" }
+```
 
 ---
 
@@ -404,6 +438,171 @@ Rejoint un serveur via un code d'invitation.
 }
 ```
 
+**Notification WS** envoyée à tous les membres du serveur :
+```json
+{
+  "message_type": "guild_member_joined",
+  "content": "{\"guild_id\": \"guild:<id>\", \"user\": { ...SimpleUser }}"
+}
+```
+
+---
+
+### `PATCH /guilds/<guild_id>` 🔒
+
+Met à jour le nom et/ou l'icône d'un serveur. Réservé au propriétaire. Les champs absents ou `null` sont conservés.
+
+**Paramètres URL**
+| Paramètre | Type | Description |
+|---|---|---|
+| `guild_id` | string | `guild:<id>` |
+
+**Corps**
+```json
+{
+  "name": "string | null",
+  "icon": "string | null"
+}
+```
+
+**Retour** `200`
+```json
+{
+  "id": "guild:<id>",
+  "name": "string",
+  "icon": "string",
+  "owner": "user:<id>",
+  "created_at": "datetime"
+}
+```
+
+**Erreurs**
+- `403` — l'utilisateur n'est pas propriétaire
+- `404` — serveur introuvable
+
+---
+
+### `GET /guilds/<guild_id>/members` 🔒
+
+Liste les membres d'un serveur avec leur profil et leurs rôles. Réservé aux membres.
+
+**Paramètres URL**
+| Paramètre | Type | Description |
+|---|---|---|
+| `guild_id` | string | `guild:<id>` |
+
+**Retour** `200`
+```json
+[
+  {
+    "id": "member_of:<id>",
+    "user": {
+      "id": "user:<id>",
+      "name": "string",
+      "display_name": "string",
+      "profile_picture": "string"
+    },
+    "roles": ["role:<id>"],
+    "nickname": "string | null",
+    "joined_at": "datetime"
+  }
+]
+```
+
+**Erreurs**
+- `403` — l'utilisateur n'est pas membre
+
+---
+
+### `POST /guilds/<guild_id>/members/<user_id>/kick` 🔒
+
+Expulse un membre du serveur. Réservé au propriétaire.
+
+**Paramètres URL**
+| Paramètre | Type | Description |
+|---|---|---|
+| `guild_id` | string | `guild:<id>` |
+| `user_id` | string | `user:<id>` de la cible |
+
+**Retour** `204`
+
+**Erreurs**
+- `400` — tentative d'expulser le propriétaire
+- `403` — l'appelant n'est pas propriétaire
+- `404` — membre introuvable
+
+**Notification WS** envoyée à tous les membres restants :
+```json
+{
+  "message_type": "guild_member_left",
+  "content": "{\"guild_id\": \"guild:<id>\", \"user_id\": \"user:<id>\"}"
+}
+```
+
+---
+
+### `GET /guilds/<guild_id>/invites` 🔒
+
+Liste les invitations actives d'un serveur. Réservé au propriétaire.
+
+**Paramètres URL**
+| Paramètre | Type | Description |
+|---|---|---|
+| `guild_id` | string | `guild:<id>` |
+
+**Retour** `200`
+```json
+[
+  {
+    "id": "guild_invite:<id>",
+    "guild": "guild:<id>",
+    "inviter": "user:<id>",
+    "code": "string",
+    "expires_at": "datetime | null",
+    "created_at": "datetime"
+  }
+]
+```
+
+---
+
+### `DELETE /guilds/<guild_id>/invites/<invite_id>` 🔒
+
+Révoque une invitation. Réservé au propriétaire.
+
+**Paramètres URL**
+| Paramètre | Type | Description |
+|---|---|---|
+| `guild_id` | string | `guild:<id>` |
+| `invite_id` | string | `guild_invite:<id>` |
+
+**Retour** `204`
+
+**Erreurs**
+- `403` — l'appelant n'est pas propriétaire
+- `404` — invitation introuvable ou n'appartient pas à ce serveur
+
+---
+
+### `POST /guilds/<guild_id>/leave` 🔒
+
+Quitte un serveur. Le propriétaire ne peut pas quitter.
+
+**Paramètres URL**
+| Paramètre | Type | Description |
+|---|---|---|
+| `guild_id` | string | `guild:<id>` |
+
+**Retour** `204`
+
+**Notification WS** envoyée aux membres restants :
+```json
+{
+  "message_type": "guild_member_left",
+  "content": "{\"guild_id\": \"guild:<id>\", \"user_id\": \"user:<id>\"}"
+}
+```
+
 ---
 
 ## Guild Channels — `/guilds`
@@ -435,6 +634,14 @@ Crée un channel dans un serveur. Réservé aux membres.
   "channel_type": "Text | Voice",
   "category": "string | null",
   "created_at": "datetime"
+}
+```
+
+**Notification WS** envoyée à tous les membres du serveur :
+```json
+{
+  "message_type": "channel_created",
+  "content": "{ ...Channel }"
 }
 ```
 
@@ -476,6 +683,14 @@ Supprime un channel et tous ses messages. Réservé au propriétaire du serveur.
 | `channel_id` | string | `channel:<id>` |
 
 **Retour** `204`
+
+**Notification WS** envoyée à tous les membres du serveur :
+```json
+{
+  "message_type": "channel_deleted",
+  "content": "{\"guild_id\": \"guild:<id>\", \"channel_id\": \"channel:<id>\"}"
+}
+```
 
 ---
 
@@ -566,6 +781,14 @@ Assigne un rôle à un membre. Réservé au propriétaire.
 
 **Retour** `204`
 
+**Notification WS** envoyée à tous les membres du serveur :
+```json
+{
+  "message_type": "role_updated",
+  "content": "{\"guild_id\": \"guild:<id>\", \"user_id\": \"user:<id>\", \"role_id\": \"role:<id>\", \"action\": \"assigned\"}"
+}
+```
+
 ---
 
 ### `DELETE /guilds/<guild_id>/members/<user_id>/roles/<role_id>` 🔒
@@ -580,6 +803,14 @@ Retire un rôle d'un membre. Réservé au propriétaire.
 | `role_id` | string | `role:<id>` |
 
 **Retour** `204`
+
+**Notification WS** envoyée à tous les membres du serveur :
+```json
+{
+  "message_type": "role_updated",
+  "content": "{\"guild_id\": \"guild:<id>\", \"user_id\": \"user:<id>\", \"role_id\": \"role:<id>\", \"action\": \"removed\"}"
+}
+```
 
 ---
 
@@ -646,11 +877,17 @@ Connexion sans query param, puis envoyer en premier message :
 | `to` | Cible : `user:<id>`, `DMChannel:<id>`, ou `channel:<id>` |
 | `message_type` | Type libre (ex: `"text"`) |
 | `content` | Contenu du message |
+| `attachments` | *(optionnel)* Tableau de fichiers déjà uploadés via `/cdn/presign` |
+
+**Format d'un attachment**
+```json
+{ "url": "string", "filename": "string", "size": 12345 }
+```
 
 | Valeur de `to` | Comportement |
 |---|---|
-| `user:<id>` | DM direct — crée le DMChannel si inexistant |
-| `DMChannel:<id>` | Message dans un DM channel existant |
+| `user:<id>` | DM direct — crée le DMChannel si inexistant. Requiert une amitié `accepted` avec la cible. |
+| `DMChannel:<id>` | Message dans un DM channel existant. Requiert une amitié `accepted` avec tous les autres participants. |
 | `channel:<id>` | Message dans un channel de serveur |
 
 ---
@@ -665,7 +902,24 @@ Connexion sans query param, puis envoyer en premier message :
 }
 ```
 
-`content` est la sérialisation JSON du `Message` persisté.
+`content` est la sérialisation JSON du message persisté, avec le profil auteur embarqué :
+```json
+{
+  "id": "message:<id>",
+  "channel": "DMChannel:<id> | channel:<id>",
+  "author": {
+    "id": "user:<id>",
+    "name": "string",
+    "display_name": "string",
+    "profile_picture": "string"
+  },
+  "content": "string",
+  "reply_to": "message:<id> | null",
+  "attachments": [],
+  "edited_at": "datetime | null",
+  "created_at": "datetime"
+}
+```
 
 ---
 
@@ -713,6 +967,63 @@ Ces messages sont envoyés spontanément par le serveur suite à des actions d'a
   "message_type": "dm_channel_created",
   "content": "DMChannel:<id>"
 }
+```
+
+**Erreur d'envoi** — envoyé à l'expéditeur quand un message WS est rejeté (ex : amitié manquante)
+```json
+{
+  "message_type": "error",
+  "content": "string"
+}
+```
+
+---
+
+**Événements serveur (guild)** — diffusés à tous les membres connectés du serveur concerné
+
+**Nouveau membre** — quand un utilisateur rejoint via `POST /guilds/join/<code>`
+```json
+{
+  "message_type": "guild_member_joined",
+  "content": "{\"guild_id\": \"guild:<id>\", \"user\": { \"id\": \"user:<id>\", \"name\": \"string\", \"display_name\": \"string\", \"profile_picture\": \"string\" }}"
+}
+```
+
+**Membre parti/expulsé** — quand un membre quitte (`POST /leave`) ou est expulsé (`POST /kick`)
+```json
+{
+  "message_type": "guild_member_left",
+  "content": "{\"guild_id\": \"guild:<id>\", \"user_id\": \"user:<id>\"}"
+}
+```
+
+**Channel créé** — quand un channel est ajouté au serveur
+```json
+{
+  "message_type": "channel_created",
+  "content": "{ ...Channel }"
+}
+```
+
+**Channel supprimé**
+```json
+{
+  "message_type": "channel_deleted",
+  "content": "{\"guild_id\": \"guild:<id>\", \"channel_id\": \"channel:<id>\"}"
+}
+```
+
+**Rôle modifié** — quand un rôle est assigné ou retiré à un membre
+```json
+{
+  "message_type": "role_updated",
+  "content": "{\"guild_id\": \"guild:<id>\", \"user_id\": \"user:<id>\", \"role_id\": \"role:<id>\", \"action\": \"assigned | removed\"}"
+}
+```
+
+**Serveur supprimé** — envoyé à tous les membres connectés quand le propriétaire supprime le serveur via `DELETE /guilds/<guild_id>`
+```json
+{ "message_type": "guild_deleted", "content": "guild:<id>" }
 ```
 
 ---

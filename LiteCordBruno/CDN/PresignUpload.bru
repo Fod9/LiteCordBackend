@@ -1,0 +1,28 @@
+meta {
+  name: Presign Upload
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{rocket_url}}:{{rocket_port}}/cdn/presign
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "filename": "avatar.png",
+    "content_type": "image/png",
+    "size": 102400
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

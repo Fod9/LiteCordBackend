@@ -203,11 +203,37 @@ pub struct Channel {
     pub created_at: Datetime,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Attachment {
     pub url: String,
     pub filename: String,
     pub size: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MemberProfile {
+    #[serde(serialize_with = "ser::opt_thing")]
+    pub id: Option<Thing>,
+    pub user: SimpleUser,
+    #[serde(serialize_with = "ser::vec_thing")]
+    pub roles: Vec<Thing>,
+    pub nickname: Option<String>,
+    pub joined_at: Datetime,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MessageWithAuthor {
+    #[serde(serialize_with = "ser::opt_thing")]
+    pub id: Option<Thing>,
+    #[serde(serialize_with = "ser::thing")]
+    pub channel: Thing,
+    pub author: SimpleUser,
+    pub content: String,
+    #[serde(serialize_with = "ser::opt_thing")]
+    pub reply_to: Option<Thing>,
+    pub attachments: Vec<Attachment>,
+    pub edited_at: Option<String>,
+    pub created_at: Datetime,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

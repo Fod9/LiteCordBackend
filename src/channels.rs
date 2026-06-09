@@ -2,6 +2,7 @@ use rocket::http::Status;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::sql::Thing;
+use crate::friends::are_accepted_friends;
 use crate::models::db::{DMChannel, DMChannelWithParticipants, Friendship, SimpleUser};
 
 pub async fn list_channels_for_user(user_id: &str, db: &Surreal<Any>) -> Result<(Vec<DMChannelWithParticipants>, Vec<Friendship>), String> {
@@ -77,6 +78,15 @@ pub async fn create_dm_channel(
         return Err((Status::NotFound, "one or more recipients not found".to_string()));
     }
 
+    for t in &all_things {
+        if t == &owner_thing {
+            continue;
+        }
+        if !are_accepted_friends(db, &owner_thing.to_raw(), &t.to_raw()).await {
+            return Err((Status::Forbidden, "you must be friends with all recipients".to_string()));
+        }
+    }
+
     let mut sorted_ids: Vec<String> = all_things.iter().map(|t| t.to_raw()).collect();
     sorted_ids.sort();
     let recipients_key = sorted_ids.join(",");
@@ -95,7 +105,7 @@ pub async fn create_dm_channel(
     }
 
     let created: Vec<DMChannel> = db
-        .query("CREATE DMChannel SET recipients = $recipients, owner = $owner, recipients_key = $rk")
+        .query("CREATE DMChannel SET recipients = $recipients, owner = $owner, recipients_key = $rk, created_at = time::now()")
         .bind(("recipients", all_things))
         .bind(("owner", owner_thing))
         .bind(("rk", recipients_key))

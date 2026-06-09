@@ -66,7 +66,8 @@ pub async fn create_channel(
              guild = $guild,
              name = $name,
              channel_type = $channel_type,
-             category = $category",
+             category = $category,
+             created_at = time::now()",
         )
         .bind(("guild", guild_thing))
         .bind(("name", name))

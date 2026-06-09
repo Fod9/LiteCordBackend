@@ -1,4 +1,5 @@
 pub mod auth_routes;
+pub mod cdn_routes;
 pub mod channels_routes;
 pub mod friends_routes;
 pub mod guild_channels_routes;

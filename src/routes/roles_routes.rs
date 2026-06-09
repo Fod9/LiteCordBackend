@@ -1,9 +1,12 @@
+use crate::chat::hub::ChatHub;
+use crate::chat::types::ServerMessage;
 use crate::models::user::AuthenticatedUser;
 use crate::roles::{assign_role, create_role, delete_role, list_roles, remove_role};
 use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::{State, delete, get, post};
 use serde::Deserialize;
+use std::sync::Arc;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 
@@ -69,10 +72,25 @@ pub async fn assign_role_route(
     target_user_id: String,
     role_id: String,
     db: &State<Surreal<Any>>,
+    hub: &State<Arc<ChatHub>>,
 ) -> Result<Status, (Status, String)> {
-    assign_role(db, &guild_id, &role_id, &target_user_id, &token.user_id)
-        .await
-        .map(|_| Status::NoContent)
+    assign_role(db, &guild_id, &role_id, &target_user_id, &token.user_id).await?;
+
+    let payload = serde_json::json!({
+        "guild_id": guild_id,
+        "user_id": target_user_id,
+        "role_id": role_id,
+        "action": "assigned"
+    })
+    .to_string();
+    let event = serde_json::to_string(&ServerMessage {
+        message_type: "role_updated".to_string(),
+        content: payload,
+    })
+    .unwrap_or_default();
+    hub.broadcast_to_guild_members(db, &guild_id, &event).await;
+
+    Ok(Status::NoContent)
 }
 
 #[delete("/<guild_id>/members/<target_user_id>/roles/<role_id>")]
@@ -82,8 +100,23 @@ pub async fn remove_role_route(
     target_user_id: String,
     role_id: String,
     db: &State<Surreal<Any>>,
+    hub: &State<Arc<ChatHub>>,
 ) -> Result<Status, (Status, String)> {
-    remove_role(db, &guild_id, &role_id, &target_user_id, &token.user_id)
-        .await
-        .map(|_| Status::NoContent)
+    remove_role(db, &guild_id, &role_id, &target_user_id, &token.user_id).await?;
+
+    let payload = serde_json::json!({
+        "guild_id": guild_id,
+        "user_id": target_user_id,
+        "role_id": role_id,
+        "action": "removed"
+    })
+    .to_string();
+    let event = serde_json::to_string(&ServerMessage {
+        message_type: "role_updated".to_string(),
+        content: payload,
+    })
+    .unwrap_or_default();
+    hub.broadcast_to_guild_members(db, &guild_id, &event).await;
+
+    Ok(Status::NoContent)
 }

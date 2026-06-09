@@ -1,3 +1,4 @@
+pub mod cdn;
 pub mod chat;
 pub mod channels;
 pub mod error;
@@ -27,6 +28,12 @@ pub mod environment {
         pub aes_key: String,
         pub token_expiration_seconds: i64,
         pub refresh_token_expiration_seconds: i64,
+        pub s3_endpoint: Option<String>,
+        pub s3_public_endpoint: Option<String>,
+        pub s3_bucket: Option<String>,
+        pub s3_access_key: Option<String>,
+        pub s3_secret_key: Option<String>,
+        pub cdn_base_url: Option<String>,
     }
 
     static CONFIG: OnceLock<Config> = OnceLock::new();

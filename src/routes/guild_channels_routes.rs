@@ -1,3 +1,5 @@
+use crate::chat::hub::ChatHub;
+use crate::chat::types::ServerMessage;
 use crate::guild_channels::{create_channel, delete_channel, list_guild_channels};
 use crate::models::db::ChannelType;
 use crate::models::user::AuthenticatedUser;
@@ -5,6 +7,7 @@ use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::{State, delete, get, post};
 use serde::Deserialize;
+use std::sync::Arc;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 
@@ -22,6 +25,7 @@ pub async fn create_channel_route(
     guild_id: String,
     body: Json<CreateChannelRequest>,
     db: &State<Surreal<Any>>,
+    hub: &State<Arc<ChatHub>>,
 ) -> Result<(Status, String), (Status, String)> {
     let body = body.into_inner();
 
@@ -31,14 +35,18 @@ pub async fn create_channel_route(
         _ => return Err((Status::BadRequest, "channel_type must be 'Text' or 'Voice'".to_string())),
     };
 
-    match create_channel(db, &guild_id, &token.user_id, body.name, channel_type, body.category).await {
-        Ok(channel) => {
-            let json = serde_json::to_string(&channel)
-                .map_err(|e| (Status::InternalServerError, e.to_string()))?;
-            Ok((Status::Created, json))
-        }
-        Err(e) => Err(e),
-    }
+    let channel = create_channel(db, &guild_id, &token.user_id, body.name, channel_type, body.category).await?;
+    let json = serde_json::to_string(&channel)
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+
+    let event = serde_json::to_string(&ServerMessage {
+        message_type: "channel_created".to_string(),
+        content: json.clone(),
+    })
+    .unwrap_or_default();
+    hub.broadcast_to_guild_members(db, &guild_id, &event).await;
+
+    Ok((Status::Created, json))
 }
 
 #[get("/<guild_id>/channels")]
@@ -63,8 +71,21 @@ pub async fn delete_channel_route(
     guild_id: String,
     channel_id: String,
     db: &State<Surreal<Any>>,
+    hub: &State<Arc<ChatHub>>,
 ) -> Result<Status, (Status, String)> {
-    delete_channel(db, &guild_id, &channel_id, &token.user_id)
-        .await
-        .map(|_| Status::NoContent)
+    delete_channel(db, &guild_id, &channel_id, &token.user_id).await?;
+
+    let payload = serde_json::json!({
+        "guild_id": guild_id,
+        "channel_id": channel_id
+    })
+    .to_string();
+    let event = serde_json::to_string(&ServerMessage {
+        message_type: "channel_deleted".to_string(),
+        content: payload,
+    })
+    .unwrap_or_default();
+    hub.broadcast_to_guild_members(db, &guild_id, &event).await;
+
+    Ok(Status::NoContent)
 }
