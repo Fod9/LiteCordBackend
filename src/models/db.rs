@@ -191,6 +191,13 @@ pub struct GuildInvite {
     pub created_at: Datetime,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PermissionOverwrite {
+    pub target: String,
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Channel {
     #[serde(serialize_with = "ser::opt_thing")]
@@ -201,6 +208,8 @@ pub struct Channel {
     pub channel_type: ChannelType,
     pub category: Option<String>,
     pub created_at: Datetime,
+    #[serde(default)]
+    pub permission_overwrites: Vec<PermissionOverwrite>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

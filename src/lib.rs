@@ -9,6 +9,7 @@ pub mod hashing;
 pub mod jwt;
 pub mod messages;
 pub mod models;
+pub mod permissions;
 pub mod roles;
 pub mod routes;
 pub mod users;

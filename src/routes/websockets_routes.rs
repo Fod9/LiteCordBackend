@@ -1,5 +1,5 @@
 use crate::chat::hub::ChatHub;
-use crate::chat::types::{AuthMessage, ChatMessage, RefreshMessage};
+use crate::chat::types::{AuthMessage, ChatMessage, RefreshMessage, ServerMessage, VoiceJoinMessage};
 use crate::jwt::decode_token;
 use crate::users::auth::refresh_token;
 use rocket::futures::{SinkExt, StreamExt};
@@ -38,9 +38,11 @@ pub fn websocket_index(
             let mut rx = register_user(&hub, &session.user_id).await;
 
             let friends_online = hub.broadcast_presence(&db, &session.user_id, true).await;
+            let voice_states = hub.voice_states_for_user(&db, &session.user_id).await;
             let auth_response = serde_json::json!({
                 "status": "authenticated",
                 "friends_online": friends_online,
+                "voice_states": voice_states,
             })
             .to_string();
             send_json(&mut stream, &auth_response).await?;
@@ -48,6 +50,7 @@ pub fn websocket_index(
             run_message_loop(&mut stream, &mut rx, &hub, &db, &mut session).await?;
 
             disconnect_user(&hub, &session.user_id).await;
+            hub.voice_leave(&db, &session.user_id).await;
             hub.broadcast_presence(&db, &session.user_id, false).await;
 
             Ok(())
@@ -147,14 +150,38 @@ async fn handle_incoming_message(
     sender_id: &str,
     hub: &Arc<ChatHub>,
 ) -> Result<(), rocket_ws::result::Error> {
-    match serde_json::from_str::<ChatMessage>(text) {
-        Ok(mut chat_msg) => {
-            chat_msg.from = Some(sender_id.to_string());
-            ChatHub::send_to(hub, db, &mut chat_msg).await;
+    let message_type = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("message_type").and_then(|t| t.as_str()).map(String::from))
+        .unwrap_or_default();
+
+    match message_type.as_str() {
+        "voice_join" => {
+            let Ok(join_msg) = serde_json::from_str::<VoiceJoinMessage>(text) else {
+                send_json(stream, r#"{"error":"invalid message format, expected: {\"message_type\": \"voice_join\", \"channel_id\": \"string\"}"}"#).await?;
+                return Ok(());
+            };
+            if let Err(code) = hub.voice_join(db, sender_id, &join_msg.channel_id).await {
+                let error = serde_json::to_string(&ServerMessage {
+                    message_type: "error".to_string(),
+                    content: code,
+                })
+                .unwrap_or_default();
+                send_json(stream, &error).await?;
+            }
         }
-        Err(_) => {
-            send_json(stream, r#"{"error":"invalid message format, expected: {\"to\": \"string\", \"message_type\": \"string\", \"content\": \"string\"}"#).await?;
+        "voice_leave" => {
+            hub.voice_leave(db, sender_id).await;
         }
+        _ => match serde_json::from_str::<ChatMessage>(text) {
+            Ok(mut chat_msg) => {
+                chat_msg.from = Some(sender_id.to_string());
+                ChatHub::send_to(hub, db, &mut chat_msg).await;
+            }
+            Err(_) => {
+                send_json(stream, r#"{"error":"invalid message format, expected: {\"to\": \"string\", \"message_type\": \"string\", \"content\": \"string\"}"#).await?;
+            }
+        },
     }
     Ok(())
 }

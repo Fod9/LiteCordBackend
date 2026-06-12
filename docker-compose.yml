@@ -66,8 +66,6 @@ services:
       ROCKET_AES_KEY: "01234567890123456789012345678901"
       ROCKET_TOKEN_EXPIRATION_SECONDS: 3600
       ROCKET_REFRESH_TOKEN_EXPIRATION_SECONDS: 604800
-      # host.docker.internal pointe vers le host Mac — MinIO est publié sur localhost:9000
-      # les URLs presignées générées seront accessibles depuis l'app Tauri
       ROCKET_S3_ENDPOINT: http://rustfs:9000
       ROCKET_S3_PUBLIC_ENDPOINT: http://localhost:9000
       ROCKET_S3_BUCKET: litecord

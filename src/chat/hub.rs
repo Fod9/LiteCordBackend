@@ -1,23 +1,44 @@
 use crate::chat::types::{ChatMessage, PresenceEvent, ServerMessage};
 use crate::friends::are_accepted_friends;
 use crate::guild_channels::get_guild_member_ids;
+use crate::guilds::share_guild;
 use crate::messages::save_message_with_author;
-use crate::models::db::{DMChannel, MemberOf};
+use crate::models::db::{DMChannel, MemberOf, SimpleUser};
+use crate::permissions::{check_channel_send, check_voice_join};
 use rocket::tokio::sync::RwLock;
 use rocket::tokio::sync::broadcast::Sender;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::sql::Thing;
 
+#[derive(Clone, Debug)]
+pub struct VoiceState {
+    pub guild_id: String,
+    pub channel_id: String,
+}
+
 pub struct ChatHub {
     pub connections: RwLock<HashMap<String, Sender<String>>>,
+    pub voice_states: RwLock<HashMap<String, VoiceState>>,
+}
+
+async fn fetch_simple_user(db: &Surreal<Any>, user_id: &str) -> Option<SimpleUser> {
+    let user_thing = surrealdb::sql::thing(user_id).ok()?;
+    db.query("SELECT id, name, display_name, profile_picture FROM user WHERE id = $id")
+        .bind(("id", user_thing))
+        .await
+        .ok()?
+        .take::<Vec<SimpleUser>>(0)
+        .ok()?
+        .pop()
 }
 
 impl ChatHub {
     pub fn new() -> Self {
         ChatHub {
             connections: RwLock::new(HashMap::new()),
+            voice_states: RwLock::new(HashMap::new()),
         }
     }
 
@@ -279,6 +300,18 @@ impl ChatHub {
             return;
         };
 
+        if let Err(code) =
+            check_channel_send(db, &channel_id, &sender_id, !message.attachments.is_empty()).await
+        {
+            let error = serde_json::to_string(&ServerMessage {
+                message_type: "error".to_string(),
+                content: code,
+            })
+            .unwrap_or_default();
+            ChatHub::forward_to_client(hub, &sender_id, &error).await;
+            return;
+        }
+
         let member_ids = match get_guild_member_ids(db, &channel_thing).await {
             Ok(ids) if !ids.is_empty() => ids,
             Ok(_) => {
@@ -290,12 +323,6 @@ impl ChatHub {
                 return;
             }
         };
-
-        let is_member = member_ids.iter().any(|id| id.to_raw() == sender_id);
-        if !is_member {
-            eprintln!("Sender {} is not a member of the guild", sender_id);
-            return;
-        }
 
         match save_message_with_author(db, &channel_id, &sender_id, &message.content, message.attachments.clone()).await {
             Ok(saved) => {
@@ -313,7 +340,37 @@ impl ChatHub {
         }
     }
 
+    pub async fn relay_to_user(hub: &ChatHub, db: &Surreal<Any>, message: &ChatMessage) {
+        let sender_id = message.from.clone().unwrap_or_default();
+        let target_id = &message.to;
+
+        if !ChatHub::can_relay(db, &sender_id, target_id).await {
+            let error = serde_json::to_string(&ServerMessage {
+                message_type: "error".to_string(),
+                content: "you must be friends or share a guild to send a relay message".to_string(),
+            })
+            .unwrap_or_default();
+            ChatHub::forward_to_client(hub, &sender_id, &error).await;
+            return;
+        }
+
+        let payload = serde_json::to_string(message).unwrap_or_default();
+        ChatHub::forward_to_client(hub, target_id, &payload).await;
+    }
+
+    // Relay (WebRTC signaling) is allowed between accepted friends and between
+    // members of a common guild (guild voice channels work without friendship).
+    pub async fn can_relay(db: &Surreal<Any>, sender_id: &str, target_id: &str) -> bool {
+        are_accepted_friends(db, sender_id, target_id).await
+            || share_guild(db, sender_id, target_id).await
+    }
+
     pub async fn send_to(hub: &ChatHub, db: &Surreal<Any>, message: &mut ChatMessage) {
+        if message.message_type == "relay" {
+            ChatHub::relay_to_user(hub, db, message).await;
+            return;
+        }
+
         let parts: Vec<&str> = message.to.split(":").collect();
 
         let (Some(data_type), Some(_id)) = (parts.get(0), parts.get(1)) else {
@@ -397,5 +454,160 @@ impl ChatHub {
         }
 
         connected_friends
+    }
+
+    async fn broadcast_voice_state(
+        &self,
+        db: &Surreal<Any>,
+        user_id: &str,
+        guild_id: &str,
+        channel_id: Option<&str>,
+    ) {
+        let Some(user) = fetch_simple_user(db, user_id).await else { return; };
+
+        let payload = serde_json::json!({
+            "user": user,
+            "guild_id": guild_id,
+            "channel_id": channel_id,
+        })
+        .to_string();
+        let event = serde_json::to_string(&ServerMessage {
+            message_type: "voice_state_update".to_string(),
+            content: payload,
+        })
+        .unwrap_or_default();
+
+        self.broadcast_to_guild_members(db, guild_id, &event).await;
+    }
+
+    // Registers `user_id` in voice channel `channel_id` after validation.
+    // Returns a stable error code on rejection, meant for the WS error event.
+    pub async fn voice_join(
+        &self,
+        db: &Surreal<Any>,
+        user_id: &str,
+        channel_id: &str,
+    ) -> Result<(), String> {
+        let channel = check_voice_join(db, channel_id, user_id).await?;
+        let guild_id = channel.guild.to_raw();
+
+        let previous = {
+            let mut states = self.voice_states.write().await;
+            states.insert(
+                user_id.to_string(),
+                VoiceState {
+                    guild_id: guild_id.clone(),
+                    channel_id: channel_id.to_string(),
+                },
+            )
+        };
+
+        if let Some(prev) = previous {
+            if prev.channel_id == channel_id {
+                return Ok(());
+            }
+            if prev.guild_id != guild_id {
+                self.broadcast_voice_state(db, user_id, &prev.guild_id, None).await;
+            }
+        }
+
+        self.broadcast_voice_state(db, user_id, &guild_id, Some(channel_id)).await;
+        Ok(())
+    }
+
+    // Removes `user_id` from their current voice channel. No-op if not in one.
+    pub async fn voice_leave(&self, db: &Surreal<Any>, user_id: &str) {
+        let removed = self.voice_states.write().await.remove(user_id);
+        if let Some(state) = removed {
+            self.broadcast_voice_state(db, user_id, &state.guild_id, None).await;
+        }
+    }
+
+    // Removes `user_id` from voice only if they are in a channel of `guild_id`
+    // (used when a member is kicked or leaves the guild).
+    pub async fn voice_leave_guild(&self, db: &Surreal<Any>, user_id: &str, guild_id: &str) {
+        let removed = {
+            let mut states = self.voice_states.write().await;
+            if states.get(user_id).map(|s| s.guild_id == guild_id) == Some(true) {
+                states.remove(user_id)
+            } else {
+                None
+            }
+        };
+        if removed.is_some() {
+            self.broadcast_voice_state(db, user_id, guild_id, None).await;
+        }
+    }
+
+    // Removes everyone from a deleted voice channel and notifies the guild.
+    pub async fn clear_channel_voice_states(
+        &self,
+        db: &Surreal<Any>,
+        guild_id: &str,
+        channel_id: &str,
+    ) {
+        let removed_users: Vec<String> = {
+            let mut states = self.voice_states.write().await;
+            let users: Vec<String> = states
+                .iter()
+                .filter(|(_, s)| s.channel_id == channel_id)
+                .map(|(uid, _)| uid.clone())
+                .collect();
+            for uid in &users {
+                states.remove(uid);
+            }
+            users
+        };
+        for uid in &removed_users {
+            self.broadcast_voice_state(db, uid, guild_id, None).await;
+        }
+    }
+
+    // Drops all voice states of a deleted guild (no broadcast: the
+    // `guild_deleted` event already tells clients to discard the guild).
+    pub async fn clear_guild_voice_states(&self, guild_id: &str) {
+        let mut states = self.voice_states.write().await;
+        states.retain(|_, s| s.guild_id != guild_id);
+    }
+
+    // Snapshot of the voice presence across all guilds `user_id` belongs to,
+    // shaped like the `voice_state_update` content for the `authenticated` response.
+    pub async fn voice_states_for_user(
+        &self,
+        db: &Surreal<Any>,
+        user_id: &str,
+    ) -> Vec<serde_json::Value> {
+        let Ok(user_thing) = surrealdb::sql::thing(user_id) else { return vec![]; };
+
+        let memberships: Vec<MemberOf> = match db
+            .query("SELECT * FROM member_of WHERE `in` = $user_id")
+            .bind(("user_id", user_thing))
+            .await
+        {
+            Ok(mut res) => res.take(0).unwrap_or_default(),
+            Err(_) => return vec![],
+        };
+        let guild_ids: HashSet<String> = memberships.iter().map(|m| m.guild.to_raw()).collect();
+
+        let snapshot: Vec<(String, VoiceState)> = {
+            let states = self.voice_states.read().await;
+            states
+                .iter()
+                .filter(|(_, s)| guild_ids.contains(&s.guild_id))
+                .map(|(uid, s)| (uid.clone(), s.clone()))
+                .collect()
+        };
+
+        let mut result = vec![];
+        for (uid, state) in snapshot {
+            if let Some(user) = fetch_simple_user(db, &uid).await {
+                result.push(serde_json::json!({
+                    "user": user,
+                    "guild_id": state.guild_id,
+                    "channel_id": state.channel_id,
+                }));
+            }
+        }
+        result
     }
 }

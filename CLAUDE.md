@@ -69,6 +69,8 @@ src/
   channels.rs                # list_channels_for_user()
   friends.rs                 # add_friend(), update_friend_request(), list_friends()
   guilds.rs                  # create_guild(), delete_guild(), leave_guild(), list_user_guilds(), create_invite(), join_guild()
+  permissions.rs             # Permission vocabulary, effective-permission computation, hierarchy checks, stable error bodies
+  roles.rs                   # create_role(), update_role(), delete_role(), assign_role(), remove_role(), check_permission()
   chat/
     hub.rs                   # ChatHub — in-memory connection registry + message routing
     types.rs                 # ChatMessage, ServerMessage, AuthMessage, RefreshMessage
@@ -156,6 +158,9 @@ After any change involving routes or WebSocket behavior, you **must** update the
 | Friend requests (add / accept / reject / list) | Done |
 | Guild system (create / join via invite / leave / delete) | Done |
 | Guild channels (text / voice) — create / list / delete + messagerie temps réel | Done |
-| Role management (create / delete / assign / remove + `check_permission`) | Done |
+| Role management (create / update / delete / assign / remove + `check_permission`) | Done |
+| Fine-grained permissions (vocabulary, per-route enforcement, role hierarchy, WS enforcement, `GET /members/me`) | Done |
 | Message persistence + history (`GET /channels/<id>/messages`) | Done |
-| Audio channels (type defined, calls not in scope yet) | Schema only |
+| Voice presence (`voice_join`/`voice_leave` WS, `voice_state_update` broadcast, `voice_states` in `authenticated`) | Done |
+| Per-channel permission overwrites (`permission_overwrites` on Channel, `PUT .../permissions`, `GET /channels` filtering) | Done |
+| Audio transport (WebRTC P2P between clients, SDP/ICE via `relay` — no server-side audio) | N/A (frontend) |

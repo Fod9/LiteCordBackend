@@ -1,7 +1,58 @@
-use crate::models::db::{Attachment, Message, MessageWithAuthor, SimpleUser};
+use crate::models::db::{Attachment, Channel, DMChannel, Message, MessageWithAuthor, SimpleUser};
+use crate::permissions::{get_channel_permissions, missing_permission_error, not_member_error};
+use rocket::http::Status;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::sql::Thing;
+
+pub async fn assert_channel_access(
+    db: &Surreal<Any>,
+    channel_id: &str,
+    user_id: &str,
+) -> Result<(), (Status, String)> {
+    let channel_thing = surrealdb::sql::thing(channel_id)
+        .map_err(|e| (Status::BadRequest, e.to_string()))?;
+
+    match channel_thing.tb.as_str() {
+        "DMChannel" => {
+            let user_thing = surrealdb::sql::thing(user_id)
+                .map_err(|e| (Status::BadRequest, e.to_string()))?;
+
+            let dm: Option<DMChannel> = db
+                .query("SELECT * FROM $channel_id")
+                .bind(("channel_id", channel_thing))
+                .await
+                .map_err(|e| (Status::InternalServerError, e.to_string()))?
+                .take(0)
+                .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+
+            let dm = dm.ok_or((Status::NotFound, "Channel not found".to_string()))?;
+
+            if !dm.recipients.iter().any(|r| r.to_raw() == user_thing.to_raw()) {
+                return Err(not_member_error());
+            }
+            Ok(())
+        }
+        "channel" => {
+            let channel: Option<Channel> = db
+                .query("SELECT * FROM $channel_id")
+                .bind(("channel_id", channel_thing))
+                .await
+                .map_err(|e| (Status::InternalServerError, e.to_string()))?
+                .take(0)
+                .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+
+            let channel = channel.ok_or((Status::NotFound, "Channel not found".to_string()))?;
+
+            let perms = get_channel_permissions(db, &channel, user_id).await?;
+            if !perms.has("view_channels") {
+                return Err(missing_permission_error("view_channels"));
+            }
+            Ok(())
+        }
+        _ => Err((Status::BadRequest, "Invalid channel id".to_string())),
+    }
+}
 
 async fn fetch_author(db: &Surreal<Any>, author_id: &Thing) -> Option<SimpleUser> {
     db.query("SELECT id, name, display_name, profile_picture FROM user WHERE id = $id")

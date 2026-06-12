@@ -1,4 +1,4 @@
-use crate::messages::get_channel_messages;
+use crate::messages::{assert_channel_access, get_channel_messages};
 use crate::models::user::AuthenticatedUser;
 use rocket::http::Status;
 use rocket::{State, get};
@@ -16,9 +16,11 @@ pub struct MessagesQuery {
 pub async fn get_messages(
     channel_id: String,
     query: MessagesQuery,
-    _token: AuthenticatedUser,
+    token: AuthenticatedUser,
     db: &State<Surreal<Any>>,
 ) -> Result<(Status, String), (Status, String)> {
+    assert_channel_access(db, &channel_id, &token.user_id).await?;
+
     match get_channel_messages(db, &channel_id, query.limit, query.before).await {
         Ok(messages) => {
             let response = serde_json::to_string(&messages)

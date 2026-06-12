@@ -1,4 +1,8 @@
-use crate::models::db::{Channel, ChannelType, Guild, MemberOf};
+use crate::models::db::{Channel, ChannelType, MemberOf, PermissionOverwrite};
+use crate::permissions::{
+    get_member_permissions_with_roles, require_permission, resolve_channel_overwrites,
+    unknown_permissions, unknown_permissions_error,
+};
 use rocket::http::Status;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
@@ -23,23 +27,6 @@ async fn assert_member(
     Ok(())
 }
 
-async fn get_guild_owner(
-    db: &Surreal<Any>,
-    guild_id: &surrealdb::sql::Thing,
-) -> Result<surrealdb::sql::Thing, (Status, String)> {
-    let guild: Option<Guild> = db
-        .query("SELECT * FROM $guild_id")
-        .bind(("guild_id", guild_id.clone()))
-        .await
-        .map_err(|e| (Status::InternalServerError, e.to_string()))?
-        .take(0)
-        .map_err(|e| (Status::InternalServerError, e.to_string()))?;
-
-    guild
-        .ok_or((Status::NotFound, "Guild not found".to_string()))
-        .map(|g| g.owner)
-}
-
 pub async fn create_channel(
     db: &Surreal<Any>,
     guild_id: &str,
@@ -50,10 +37,8 @@ pub async fn create_channel(
 ) -> Result<Channel, (Status, String)> {
     let guild_thing = surrealdb::sql::thing(guild_id)
         .map_err(|e| (Status::BadRequest, e.to_string()))?;
-    let user_thing = surrealdb::sql::thing(user_id)
-        .map_err(|e| (Status::BadRequest, e.to_string()))?;
 
-    assert_member(db, &guild_thing, &user_thing).await?;
+    require_permission(db, guild_id, user_id, "manage_channels").await?;
 
     let type_str = match channel_type {
         ChannelType::Text => "Text",
@@ -93,12 +78,82 @@ pub async fn list_guild_channels(
 
     assert_member(db, &guild_thing, &user_thing).await?;
 
-    db.query("SELECT * FROM channel WHERE guild = $guild ORDER BY created_at ASC")
+    let (base, role_ids) = get_member_permissions_with_roles(db, guild_id, user_id).await?;
+
+    let channels: Vec<Channel> = db
+        .query("SELECT * FROM channel WHERE guild = $guild ORDER BY created_at ASC")
         .bind(("guild", guild_thing))
         .await
         .map_err(|e| (Status::InternalServerError, e.to_string()))?
         .take(0)
-        .map_err(|e| (Status::InternalServerError, e.to_string()))
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+
+    Ok(channels
+        .into_iter()
+        .filter(|channel| {
+            let perms = resolve_channel_overwrites(
+                base.clone(),
+                &role_ids,
+                user_id,
+                &channel.permission_overwrites,
+            );
+            perms.has("view_channels")
+        })
+        .collect())
+}
+
+pub async fn update_channel_permissions(
+    db: &Surreal<Any>,
+    guild_id: &str,
+    channel_id: &str,
+    user_id: &str,
+    overwrites: Vec<PermissionOverwrite>,
+) -> Result<Channel, (Status, String)> {
+    let guild_thing = surrealdb::sql::thing(guild_id)
+        .map_err(|e| (Status::BadRequest, e.to_string()))?;
+    let channel_thing = surrealdb::sql::thing(channel_id)
+        .map_err(|e| (Status::BadRequest, e.to_string()))?;
+
+    require_permission(db, guild_id, user_id, "manage_channels").await?;
+
+    let mut unknown: Vec<String> = vec![];
+    for ow in &overwrites {
+        let target = surrealdb::sql::thing(&ow.target)
+            .map_err(|_| (Status::BadRequest, format!(r#"{{"error":"invalid_target","target":"{}"}}"#, ow.target)))?;
+        if target.tb != "role" && target.tb != "user" {
+            return Err((
+                Status::BadRequest,
+                format!(r#"{{"error":"invalid_target","target":"{}"}}"#, ow.target),
+            ));
+        }
+        unknown.extend(unknown_permissions(&ow.allow));
+        unknown.extend(unknown_permissions(&ow.deny));
+    }
+    if !unknown.is_empty() {
+        return Err(unknown_permissions_error(&unknown));
+    }
+
+    let channel: Option<Channel> = db
+        .query("SELECT * FROM $channel_id WHERE guild = $guild_id")
+        .bind(("channel_id", channel_thing.clone()))
+        .bind(("guild_id", guild_thing))
+        .await
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?
+        .take(0)
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+
+    channel.ok_or((Status::NotFound, "Channel not found or does not belong to this guild".to_string()))?;
+
+    let updated: Option<Channel> = db
+        .query("UPDATE $channel_id SET permission_overwrites = $overwrites")
+        .bind(("channel_id", channel_thing))
+        .bind(("overwrites", overwrites))
+        .await
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?
+        .take(0)
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+
+    updated.ok_or((Status::InternalServerError, "Failed to update channel permissions".to_string()))
 }
 
 pub async fn delete_channel(
@@ -111,14 +166,19 @@ pub async fn delete_channel(
         .map_err(|e| (Status::BadRequest, e.to_string()))?;
     let channel_thing = surrealdb::sql::thing(channel_id)
         .map_err(|e| (Status::BadRequest, e.to_string()))?;
-    let user_thing = surrealdb::sql::thing(user_id)
-        .map_err(|e| (Status::BadRequest, e.to_string()))?;
 
-    let owner = get_guild_owner(db, &guild_thing).await?;
+    require_permission(db, guild_id, user_id, "manage_channels").await?;
 
-    if owner.to_raw() != user_thing.to_raw() {
-        return Err((Status::Forbidden, "Only the guild owner can delete channels".to_string()));
-    }
+    let channel: Option<Channel> = db
+        .query("SELECT * FROM $channel_id WHERE guild = $guild_id")
+        .bind(("channel_id", channel_thing.clone()))
+        .bind(("guild_id", guild_thing))
+        .await
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?
+        .take(0)
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?;
+
+    channel.ok_or((Status::NotFound, "Channel not found or does not belong to this guild".to_string()))?;
 
     db.query("DELETE message WHERE channel = $channel_id")
         .bind(("channel_id", channel_thing.clone()))

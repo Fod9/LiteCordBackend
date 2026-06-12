@@ -67,7 +67,7 @@ async fn list_roles_returns_guild_roles() {
     create_role(&db, &guild_id.to_raw(), &owner_id.to_raw(), "Mod".to_string(), "#ff0000".to_string(), 1, vec![]).await.unwrap();
     create_role(&db, &guild_id.to_raw(), &owner_id.to_raw(), "Helper".to_string(), "#00ff00".to_string(), 2, vec![]).await.unwrap();
 
-    let roles = list_roles(&db, &guild_id.to_raw()).await.unwrap();
+    let roles = list_roles(&db, &guild_id.to_raw(), &owner_id.to_raw()).await.unwrap();
     assert_eq!(roles.len(), 2);
 }
 
@@ -170,7 +170,7 @@ async fn delete_role_by_owner_succeeds() {
     let result = delete_role(&db, &guild_id.to_raw(), &role_id.to_raw(), &owner_id.to_raw()).await;
     assert!(result.is_ok(), "owner should be able to delete a role: {:?}", result);
 
-    let roles = list_roles(&db, &guild_id.to_raw()).await.unwrap();
+    let roles = list_roles(&db, &guild_id.to_raw(), &owner_id.to_raw()).await.unwrap();
     assert_eq!(roles.len(), 0);
 }
 

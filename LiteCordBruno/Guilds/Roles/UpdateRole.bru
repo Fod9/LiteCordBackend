@@ -1,0 +1,29 @@
+meta {
+  name: UpdateRole
+  type: http
+  seq: 6
+}
+
+patch {
+  url: {{rocket_url}}:{{rocket_port}}/guilds/{{guild_id}}/roles/{{role_id}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "Modérateur",
+    "color": "#ff0000",
+    "position": 1,
+    "permissions": ["kick_members", "manage_messages"]
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

@@ -1,0 +1,29 @@
+meta {
+  name: UpdateChannelPermissions
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{rocket_url}}:{{rocket_port}}/guilds/{{guild_id}}/channels/{{channel_id}}/permissions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "permission_overwrites": [
+      { "target": "role:xxxx", "allow": ["view_channels", "send_messages"], "deny": [] },
+      { "target": "user:xxxx", "allow": [], "deny": ["view_channels"] }
+    ]
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

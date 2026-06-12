@@ -6,7 +6,7 @@ use rocket::serde::json::Json;
 use rocket::{State, post};
 use serde::{Deserialize, Serialize};
 
-const MAX_SIZE_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_SIZE_BYTES: u64 = 100 * 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serde(crate = "rocket::serde")]
@@ -31,7 +31,7 @@ pub async fn presign_route(
     let body = body.into_inner();
 
     if body.size > MAX_SIZE_BYTES {
-        return Err((Status::PayloadTooLarge, "File exceeds 25 MB limit".to_string()));
+        return Err((Status::PayloadTooLarge, "File exceeds 100 MB limit".to_string()));
     }
 
     if body.filename.is_empty() || body.content_type.is_empty() {

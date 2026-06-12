@@ -1,8 +1,9 @@
 use crate::chat::hub::ChatHub;
 use crate::chat::types::ServerMessage;
 use crate::guilds::{
-    create_guild, create_invite, delete_guild, join_guild, kick_member, leave_guild,
-    list_guild_invites, list_guild_members, list_user_guilds, revoke_invite, update_guild,
+    create_guild, create_invite, delete_guild, get_my_membership, join_guild, kick_member,
+    leave_guild, list_guild_invites, list_guild_members, list_user_guilds, revoke_invite,
+    update_guild,
 };
 use crate::models::db::SimpleUser;
 use crate::models::user::AuthenticatedUser;
@@ -69,6 +70,8 @@ pub async fn delete_guild_route(
 ) -> Result<Status, (Status, String)> {
     let member_ids = delete_guild(db, &guild_id, &token.user_id).await?;
 
+    hub.clear_guild_voice_states(&guild_id).await;
+
     let event = serde_json::to_string(&ServerMessage {
         message_type: "guild_deleted".to_string(),
         content: guild_id,
@@ -90,6 +93,8 @@ pub async fn leave_guild_route(
     hub: &State<Arc<ChatHub>>,
 ) -> Result<Status, (Status, String)> {
     leave_guild(db, &guild_id, &token.user_id).await?;
+
+    hub.voice_leave_guild(db, &token.user_id, &guild_id).await;
 
     let payload = serde_json::json!({
         "guild_id": guild_id,
@@ -181,6 +186,21 @@ pub async fn list_guild_members_route(
     }
 }
 
+#[get("/<guild_id>/members/me")]
+pub async fn get_my_member_route(
+    token: AuthenticatedUser,
+    guild_id: String,
+    db: &State<Surreal<Any>>,
+) -> Result<(Status, String), (Status, String)> {
+    let (member, permissions) = get_my_membership(db, &guild_id, &token.user_id).await?;
+
+    let body = serde_json::json!({
+        "member": member,
+        "permissions": permissions
+    });
+    Ok((Status::Ok, body.to_string()))
+}
+
 #[post("/<guild_id>/members/<user_id>/kick")]
 pub async fn kick_member_route(
     token: AuthenticatedUser,
@@ -190,6 +210,8 @@ pub async fn kick_member_route(
     hub: &State<Arc<ChatHub>>,
 ) -> Result<Status, (Status, String)> {
     kick_member(db, &guild_id, &user_id, &token.user_id).await?;
+
+    hub.voice_leave_guild(db, &user_id, &guild_id).await;
 
     let payload = serde_json::json!({
         "guild_id": guild_id,

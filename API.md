@@ -4,8 +4,62 @@
 
 - **Auth** : toutes les routes marquées 🔒 requièrent le header `Authorization: Bearer <token>`
 - **Content-Type** : `application/json` pour tous les corps de requête
-- **Erreurs** : corps texte brut, status HTTP correspondant à l'erreur
+- **Erreurs** : corps texte brut, status HTTP correspondant à l'erreur — **sauf** les erreurs de permission, qui ont un format JSON stable (voir ci-dessous)
 - **IDs** : format string `"<table>:<id>"`, ex: `"user:abc123"`, `"friendship:xyz789"`
+
+---
+
+## Permissions
+
+### Vocabulaire
+
+Les permissions sont des identifiants snake_case stockés tels quels dans `role.permissions`. Toute valeur hors vocabulaire est refusée à l'écriture (`400`), ignorée au calcul si elle traîne en base, et purgée au prochain `PATCH` du rôle.
+
+| Catégorie | ID | Effet |
+|---|---|---|
+| Serveur | `administrator` | Accorde **toutes** les permissions (bypass hiérarchie inclus) |
+| Serveur | `manage_guild` | Modifier nom/icône du serveur |
+| Serveur | `manage_roles` | CRUD des rôles + assignation/retrait aux membres |
+| Serveur | `manage_channels` | Créer/supprimer des channels |
+| Serveur | `create_invite` | Générer des codes d'invitation |
+| Serveur | `manage_invites` | Lister et révoquer les invitations |
+| Membres | `kick_members` | Expulser des membres |
+| Membres | `ban_members` | *(réservé, endpoints à venir)* |
+| Membres | `manage_nicknames` | *(réservé, endpoints à venir)* |
+| Texte | `view_channels` | Voir les channels et lire l'historique |
+| Texte | `send_messages` | Envoyer des messages (WS) |
+| Texte | `attach_files` | Joindre des fichiers aux messages |
+| Texte | `manage_messages` | *(réservé, endpoints à venir)* |
+| Texte | `mention_everyone` | *(réservé)* |
+| Vocal | `connect`, `speak`, `mute_members`, `move_members` | *(réservés pour la feature vocal)* |
+
+### Sémantique
+
+- **Owner** : possède implicitement toutes les permissions, ne peut être ni kické ni rétrogradé. `DELETE /guilds/<gid>` reste owner-only.
+- **Socle par défaut** (codé en dur, pas de rôle `@everyone` matérialisé) : tout membre possède
+  `view_channels`, `send_messages`, `attach_files`, `create_invite`, `connect`, `speak`.
+- **Cumul** : permissions effectives = socle ∪ permissions de tous les rôles assignés (union).
+- **`administrator`** : équivaut à toutes les permissions et contourne la hiérarchie.
+
+### Hiérarchie des rôles
+
+Convention : **`position` plus petite = rôle plus élevé** (0 = le plus haut). Le tri `ORDER BY position ASC` de `GET /roles` affiche donc du plus haut au plus bas. Règles (contournées par owner et `administrator`) :
+
+- Créer/modifier/supprimer un rôle : uniquement si sa `position` est strictement inférieure (numériquement supérieure) à son propre rôle le plus élevé — y compris la `position` cible d'un déplacement.
+- Assigner/retirer un rôle : uniquement des rôles strictement inférieurs au sien.
+- Accorder une permission : impossible d'ajouter à un rôle une permission qu'on ne possède pas soi-même.
+- `kick_members` : seulement si le rôle le plus élevé de la cible est strictement inférieur au sien.
+
+### Format d'erreur stable (HTTP)
+
+| Cas | Status | Corps |
+|---|---|---|
+| Permission manquante | `403` | `{"error": "missing_permission", "permission": "manage_channels"}` |
+| Non-membre du serveur | `403` | `{"error": "not_member"}` |
+| Violation de hiérarchie | `403` | `{"error": "role_hierarchy"}` |
+| Permission inconnue dans `permissions` | `400` | `{"error": "unknown_permissions", "permissions": ["valeur_refusee"]}` |
+
+Sur le WebSocket, le rejet passe par l'événement `error` existant avec un code stable en `content` : `missing_permission:<permission_id>` ou `not_member`.
 
 ---
 
@@ -242,6 +296,10 @@ Retourne l'historique de messages d'un channel (DMChannel ou channel de serveur)
 ]
 ```
 
+**Erreurs**
+- `403` — `{"error": "not_member"}` (DM dont on n'est pas destinataire) ou `{"error": "missing_permission", "permission": "view_channels"}` (channel d'un serveur dont on n'est pas membre)
+- `404` — channel introuvable
+
 ---
 
 ## Friends — `/friends`
@@ -397,7 +455,7 @@ Supprime un serveur. Réservé au propriétaire. Supprime membres et invitations
 
 ### `POST /guilds/<guild_id>/invites` 🔒
 
-Génère un code d'invitation. Réservé aux membres.
+Génère un code d'invitation. Requiert la permission `create_invite` (incluse dans le socle par défaut : tout membre l'a, sauf configuration contraire future).
 
 **Paramètres URL**
 | Paramètre | Type | Description |
@@ -450,7 +508,7 @@ Rejoint un serveur via un code d'invitation.
 
 ### `PATCH /guilds/<guild_id>` 🔒
 
-Met à jour le nom et/ou l'icône d'un serveur. Réservé au propriétaire. Les champs absents ou `null` sont conservés.
+Met à jour le nom et/ou l'icône d'un serveur. Requiert la permission `manage_guild`. Les champs absents ou `null` sont conservés.
 
 **Paramètres URL**
 | Paramètre | Type | Description |
@@ -477,7 +535,7 @@ Met à jour le nom et/ou l'icône d'un serveur. Réservé au propriétaire. Les 
 ```
 
 **Erreurs**
-- `403` — l'utilisateur n'est pas propriétaire
+- `403` — `missing_permission:manage_guild` ou `not_member` (format JSON, voir Permissions)
 - `404` — serveur introuvable
 
 ---
@@ -514,9 +572,43 @@ Liste les membres d'un serveur avec leur profil et leurs rôles. Réservé aux m
 
 ---
 
+### `GET /guilds/<guild_id>/members/me` 🔒
+
+Retourne le profil de membre de l'utilisateur connecté **et ses permissions effectives calculées côté serveur** (socle ∪ rôles ; vocabulaire complet pour owner/admin).
+
+**Paramètres URL**
+| Paramètre | Type | Description |
+|---|---|---|
+| `guild_id` | string | `guild:<id>` |
+
+**Retour** `200`
+```json
+{
+  "member": {
+    "id": "member_of:<id>",
+    "user": {
+      "id": "user:<id>",
+      "name": "string",
+      "display_name": "string",
+      "profile_picture": "string"
+    },
+    "roles": ["role:<id>"],
+    "nickname": "string | null",
+    "joined_at": "datetime"
+  },
+  "permissions": ["attach_files", "connect", "create_invite", "send_messages", "speak", "view_channels"]
+}
+```
+
+**Erreurs**
+- `403` — `{"error": "not_member"}`
+- `404` — serveur introuvable
+
+---
+
 ### `POST /guilds/<guild_id>/members/<user_id>/kick` 🔒
 
-Expulse un membre du serveur. Réservé au propriétaire.
+Expulse un membre du serveur. Requiert la permission `kick_members` ; le rôle le plus élevé de la cible doit être strictement inférieur à celui de l'appelant (sauf owner/admin).
 
 **Paramètres URL**
 | Paramètre | Type | Description |
@@ -527,8 +619,8 @@ Expulse un membre du serveur. Réservé au propriétaire.
 **Retour** `204`
 
 **Erreurs**
-- `400` — tentative d'expulser le propriétaire
-- `403` — l'appelant n'est pas propriétaire
+- `400` — tentative d'expulser le propriétaire ou soi-même
+- `403` — `missing_permission:kick_members` ou `role_hierarchy` (format JSON, voir Permissions)
 - `404` — membre introuvable
 
 **Notification WS** envoyée à tous les membres restants :
@@ -543,7 +635,7 @@ Expulse un membre du serveur. Réservé au propriétaire.
 
 ### `GET /guilds/<guild_id>/invites` 🔒
 
-Liste les invitations actives d'un serveur. Réservé au propriétaire.
+Liste les invitations actives d'un serveur. Requiert la permission `manage_invites`.
 
 **Paramètres URL**
 | Paramètre | Type | Description |
@@ -568,7 +660,7 @@ Liste les invitations actives d'un serveur. Réservé au propriétaire.
 
 ### `DELETE /guilds/<guild_id>/invites/<invite_id>` 🔒
 
-Révoque une invitation. Réservé au propriétaire.
+Révoque une invitation. Requiert la permission `manage_invites`.
 
 **Paramètres URL**
 | Paramètre | Type | Description |
@@ -579,7 +671,7 @@ Révoque une invitation. Réservé au propriétaire.
 **Retour** `204`
 
 **Erreurs**
-- `403` — l'appelant n'est pas propriétaire
+- `403` — `missing_permission:manage_invites` (format JSON, voir Permissions)
 - `404` — invitation introuvable ou n'appartient pas à ce serveur
 
 ---
@@ -609,7 +701,7 @@ Quitte un serveur. Le propriétaire ne peut pas quitter.
 
 ### `POST /guilds/<guild_id>/channels` 🔒
 
-Crée un channel dans un serveur. Réservé aux membres.
+Crée un channel dans un serveur. Requiert la permission `manage_channels` (⚠️ n'est plus ouvert à tout membre).
 
 **Paramètres URL**
 | Paramètre | Type | Description |
@@ -633,7 +725,8 @@ Crée un channel dans un serveur. Réservé aux membres.
   "name": "string",
   "channel_type": "Text | Voice",
   "category": "string | null",
-  "created_at": "datetime"
+  "created_at": "datetime",
+  "permission_overwrites": []
 }
 ```
 
@@ -651,6 +744,8 @@ Crée un channel dans un serveur. Réservé aux membres.
 
 Liste les channels d'un serveur. Réservé aux membres.
 
+Les channels sur lesquels l'utilisateur n'a pas la permission effective `view_channels` (deny via `permission_overwrites` non compensé par un allow) sont **exclus** de la réponse. Le nombre de channels visibles peut donc varier par membre.
+
 **Paramètres URL**
 | Paramètre | Type | Description |
 |---|---|---|
@@ -665,16 +760,71 @@ Liste les channels d'un serveur. Réservé aux membres.
     "name": "string",
     "channel_type": "Text | Voice",
     "category": "string | null",
-    "created_at": "datetime"
+    "created_at": "datetime",
+    "permission_overwrites": [
+      { "target": "role:<id>", "allow": ["view_channels"], "deny": [] }
+    ]
   }
 ]
 ```
 
 ---
 
+### `PUT /guilds/<guild_id>/channels/<channel_id>/permissions` 🔒
+
+Remplace la liste entière des overrides de permissions du channel. Requiert la permission `manage_channels`.
+
+**Paramètres URL**
+| Paramètre | Type | Description |
+|---|---|---|
+| `guild_id` | string | `guild:<id>` |
+| `channel_id` | string | `channel:<id>` |
+
+**Corps**
+```json
+{
+  "permission_overwrites": [
+    { "target": "role:<id>", "allow": ["view_channels"], "deny": [] },
+    { "target": "user:<id>", "allow": [], "deny": ["view_channels"] }
+  ]
+}
+```
+
+| Champ | Type | Description |
+|---|---|---|
+| `target` | string | `role:<id>` ou `user:<id>` |
+| `allow` | string[] | Permissions accordées sur ce channel |
+| `deny` | string[] | Permissions retirées sur ce channel |
+
+**Résolution des permissions effectives sur un channel** (priorité croissante) :
+1. Socle + rôles (permissions effectives globales)
+2. `deny` des rôles du membre
+3. `allow` des rôles du membre
+4. `deny` de l'utilisateur spécifique
+5. `allow` de l'utilisateur spécifique
+6. `administrator` (et le propriétaire) contourne toujours tout
+
+**Retour** `200` — l'objet Channel mis à jour (avec `permission_overwrites` peuplé).
+
+**Erreurs**
+- `403` — `missing_permission:manage_channels` (format JSON, voir Permissions)
+- `400` — `{"error":"unknown_permissions","permissions":[...]}` si une permission de `allow`/`deny` est inconnue
+- `400` — `{"error":"invalid_target","target":"..."}` si `target` n'est pas un `role:<id>` ou `user:<id>`
+- `404` — channel introuvable ou n'appartenant pas à ce serveur
+
+**Notification WS** envoyée à tous les membres du serveur :
+```json
+{
+  "message_type": "channel_permissions_updated",
+  "content": "{ ...Channel }"
+}
+```
+
+---
+
 ### `DELETE /guilds/<guild_id>/channels/<channel_id>` 🔒
 
-Supprime un channel et tous ses messages. Réservé au propriétaire du serveur.
+Supprime un channel et tous ses messages. Requiert la permission `manage_channels`.
 
 **Paramètres URL**
 | Paramètre | Type | Description |
@@ -683,6 +833,10 @@ Supprime un channel et tous ses messages. Réservé au propriétaire du serveur.
 | `channel_id` | string | `channel:<id>` |
 
 **Retour** `204`
+
+**Erreurs**
+- `403` — `missing_permission:manage_channels` (format JSON, voir Permissions)
+- `404` — channel introuvable ou n'appartenant pas à ce serveur
 
 **Notification WS** envoyée à tous les membres du serveur :
 ```json
@@ -698,7 +852,7 @@ Supprime un channel et tous ses messages. Réservé au propriétaire du serveur.
 
 ### `POST /guilds/<guild_id>/roles` 🔒
 
-Crée un rôle dans un serveur. Réservé au propriétaire.
+Crée un rôle dans un serveur. Requiert la permission `manage_roles`. Les `permissions` sont validées contre le vocabulaire (voir Permissions) ; la `position` doit être strictement inférieure au rôle le plus élevé de l'appelant et il est impossible d'accorder une permission qu'on ne possède pas (sauf owner/admin).
 
 **Paramètres URL**
 | Paramètre | Type | Description |
@@ -727,11 +881,60 @@ Crée un rôle dans un serveur. Réservé au propriétaire.
 }
 ```
 
+**Erreurs**
+- `400` — `{"error": "unknown_permissions", "permissions": [...]}`
+- `403` — `missing_permission:manage_roles` ou `role_hierarchy` (format JSON, voir Permissions)
+
+**Notification WS** envoyée à tous les membres du serveur :
+```json
+{
+  "message_type": "role_created",
+  "content": "{ ...Role }"
+}
+```
+
+---
+
+### `PATCH /guilds/<guild_id>/roles/<role_id>` 🔒
+
+Modifie un rôle existant. Requiert la permission `manage_roles`. Tous les champs sont optionnels — champ absent = conservé. Mêmes règles de validation et de hiérarchie que la création (rôle cible **et** nouvelle `position` strictement inférieurs au rôle le plus élevé de l'appelant ; impossible d'ajouter une permission qu'on ne possède pas). Les valeurs hors vocabulaire qui traîneraient en base sont purgées à cette occasion.
+
+**Paramètres URL**
+| Paramètre | Type | Description |
+|---|---|---|
+| `guild_id` | string | `guild:<id>` |
+| `role_id` | string | `role:<id>` |
+
+**Corps**
+```json
+{
+  "name": "string",
+  "color": "string",
+  "position": 1,
+  "permissions": ["kick_members", "manage_messages"]
+}
+```
+
+**Retour** `200` — l'objet Role complet mis à jour (même forme que `GET /roles`).
+
+**Erreurs**
+- `400` — `{"error": "unknown_permissions", "permissions": [...]}`
+- `403` — `missing_permission:manage_roles` ou `role_hierarchy` (format JSON, voir Permissions)
+- `404` — rôle introuvable ou n'appartenant pas à ce serveur
+
+**Notification WS** envoyée à tous les membres du serveur :
+```json
+{
+  "message_type": "role_modified",
+  "content": "{ ...Role }"
+}
+```
+
 ---
 
 ### `GET /guilds/<guild_id>/roles` 🔒
 
-Liste les rôles d'un serveur, triés par position croissante.
+Liste les rôles d'un serveur, triés par position croissante (du plus haut au plus bas dans la hiérarchie). Réservé aux membres.
 
 **Paramètres URL**
 | Paramètre | Type | Description |
@@ -756,7 +959,7 @@ Liste les rôles d'un serveur, triés par position croissante.
 
 ### `DELETE /guilds/<guild_id>/roles/<role_id>` 🔒
 
-Supprime un rôle et le retire de tous les membres. Réservé au propriétaire.
+Supprime un rôle et le retire de tous les membres. Requiert la permission `manage_roles` ; le rôle doit être strictement inférieur au rôle le plus élevé de l'appelant.
 
 **Paramètres URL**
 | Paramètre | Type | Description |
@@ -766,11 +969,23 @@ Supprime un rôle et le retire de tous les membres. Réservé au propriétaire.
 
 **Retour** `204`
 
+**Erreurs**
+- `403` — `missing_permission:manage_roles` ou `role_hierarchy` (format JSON, voir Permissions)
+- `404` — rôle introuvable ou n'appartenant pas à ce serveur
+
+**Notification WS** envoyée à tous les membres du serveur :
+```json
+{
+  "message_type": "role_deleted",
+  "content": "{\"guild_id\": \"guild:<id>\", \"role_id\": \"role:<id>\"}"
+}
+```
+
 ---
 
 ### `POST /guilds/<guild_id>/members/<user_id>/roles/<role_id>` 🔒
 
-Assigne un rôle à un membre. Réservé au propriétaire.
+Assigne un rôle à un membre. Requiert la permission `manage_roles` ; le rôle doit être strictement inférieur au rôle le plus élevé de l'appelant.
 
 **Paramètres URL**
 | Paramètre | Type | Description |
@@ -793,7 +1008,7 @@ Assigne un rôle à un membre. Réservé au propriétaire.
 
 ### `DELETE /guilds/<guild_id>/members/<user_id>/roles/<role_id>` 🔒
 
-Retire un rôle d'un membre. Réservé au propriétaire.
+Retire un rôle d'un membre. Requiert la permission `manage_roles` ; le rôle doit être strictement inférieur au rôle le plus élevé de l'appelant.
 
 **Paramètres URL**
 | Paramètre | Type | Description |
@@ -832,7 +1047,7 @@ Deux méthodes au choix :
 
 **1. Query param (recommandé pour les outils de test)**
 
-Passer le token dans l'URL : `ws://host/ws/?token=<token>`  
+Passer le token dans l'URL : `ws://host/ws/?token=<token>`
 Le serveur répond immédiatement avec `{ "status": "authenticated" }`.
 
 **2. Premier message WS**
@@ -848,11 +1063,20 @@ Connexion sans query param, puis envoyer en premier message :
 ```json
 {
   "status": "authenticated",
-  "friends_online": ["user:<id>"]
+  "friends_online": ["user:<id>"],
+  "voice_states": [
+    {
+      "user": { "id": "user:<id>", "name": "string", "display_name": "string", "profile_picture": "string" },
+      "guild_id": "guild:<id>",
+      "channel_id": "channel:<id>"
+    }
+  ]
 }
 ```
 
 `friends_online` : liste des IDs d'amis déjà connectés au moment de l'auth. Permet d'initialiser l'état de présence sans polling.
+
+`voice_states` : état courant de la présence vocale dans tous les serveurs dont l'utilisateur est membre. Permet d'initialiser l'affichage des channels vocaux ; à maintenir ensuite via les événements `voice_state_update`.
 
 **Serveur → Client** (token invalide)
 ```json
@@ -888,7 +1112,98 @@ Connexion sans query param, puis envoyer en premier message :
 |---|---|
 | `user:<id>` | DM direct — crée le DMChannel si inexistant. Requiert une amitié `accepted` avec la cible. |
 | `DMChannel:<id>` | Message dans un DM channel existant. Requiert une amitié `accepted` avec tous les autres participants. |
-| `channel:<id>` | Message dans un channel de serveur |
+| `channel:<id>` | Message dans un channel de serveur. Requiert d'être membre du serveur + la permission `send_messages` ; `attach_files` en plus si `attachments` est non vide. |
+
+En cas de rejet sur `channel:<id>`, le serveur répond à l'expéditeur avec l'événement `error` et un code stable en `content` :
+```json
+{ "message_type": "error", "content": "missing_permission:send_messages" }
+```
+Codes possibles : `not_member`, `missing_permission:send_messages`, `missing_permission:attach_files`, `channel_not_found`, `invalid_channel`.
+
+#### Message relay (P2P signaling)
+
+Quand `message_type` vaut `"relay"`, le serveur transmet le message directement au destinataire **sans le persister en base**. Conçu pour l'échange de signaux WebRTC (SDP/ICE).
+
+**Client → Serveur**
+```json
+{
+  "to": "user:<id>",
+  "message_type": "relay",
+  "content": "<SDP ou ICE candidate>"
+}
+```
+
+Requiert une amitié `accepted` avec la cible. Si la cible n'est pas connectée, le message est silencieusement ignoré.
+
+**Serveur → Client destinataire**
+```json
+{
+  "to": "user:<id>",
+  "message_type": "relay",
+  "from": "user:<sender_id>",
+  "content": "<SDP ou ICE candidate>",
+  "attachments": []
+}
+```
+
+---
+
+### Channels vocaux
+
+Le serveur ne transporte pas l'audio (WebRTC peer-to-peer côté clients, signaux SDP/ICE via `relay`) — il ne fait que suivre et diffuser la présence vocale.
+
+#### Rejoindre un channel vocal
+
+**Client → Serveur**
+```json
+{ "message_type": "voice_join", "channel_id": "channel:<id>" }
+```
+
+Enregistre l'utilisateur dans le channel vocal. S'il était déjà dans un autre channel vocal (même serveur ou non), il en est retiré automatiquement (avec diffusion d'un `voice_state_update` à `channel_id: null` dans l'ancien serveur si différent).
+
+**Validation :**
+- `channel_id` doit être un channel `Voice` d'un serveur dont l'utilisateur est membre
+- Requiert la permission effective `connect` sur le channel (socle par défaut, modifiable par `permission_overwrites`)
+
+En cas de rejet, le serveur répond avec l'événement `error` et un code stable en `content` : `missing_permission:connect`, `not_member`, `not_voice_channel`, `channel_not_found`, `invalid_channel`.
+```json
+{ "message_type": "error", "content": "missing_permission:connect" }
+```
+
+#### Quitter le channel vocal
+
+**Client → Serveur**
+```json
+{ "message_type": "voice_leave" }
+```
+
+Retire l'utilisateur de son channel vocal actuel. No-op s'il n'est dans aucun channel.
+
+#### `voice_state_update` (Serveur → tous les membres du serveur)
+
+Diffusé dès qu'un utilisateur rejoint ou quitte un channel vocal.
+
+```json
+{
+  "message_type": "voice_state_update",
+  "content": "{\"user\":{\"id\":\"user:<id>\",\"name\":\"alice\",\"display_name\":\"Alice\",\"profile_picture\":\"\"},\"guild_id\":\"guild:<id>\",\"channel_id\":\"channel:<id>\"}"
+}
+```
+
+Sémantique du champ `content` (JSON stringifié) :
+
+| Champ | Type | Description |
+|---|---|---|
+| `user` | SimpleUser | Infos de l'utilisateur (id, name, display_name, profile_picture) |
+| `guild_id` | `string` | ID du serveur concerné |
+| `channel_id` | `string \| null` | ID du channel rejoint, `null` si l'utilisateur a quitté le vocal |
+
+**Déclenchement :**
+- `voice_join` : `channel_id` = le channel rejoint
+- `voice_leave` : `channel_id` = `null`
+- Déconnexion du WS : `channel_id` = `null` (cleanup immédiat)
+- Kick ou départ du serveur : `channel_id` = `null`
+- Suppression du channel vocal : `channel_id` = `null` pour chaque occupant
 
 ---
 
@@ -1013,11 +1328,43 @@ Ces messages sont envoyés spontanément par le serveur suite à des actions d'a
 }
 ```
 
-**Rôle modifié** — quand un rôle est assigné ou retiré à un membre
+**Permissions d'un channel modifiées** — quand les overrides sont remplacés via `PUT /guilds/<gid>/channels/<cid>/permissions` (le client doit recalculer la visibilité et les permissions effectives du channel)
+```json
+{
+  "message_type": "channel_permissions_updated",
+  "content": "{ ...Channel }"
+}
+```
+
+**Rôle assigné/retiré** — quand un rôle est assigné ou retiré à un membre
 ```json
 {
   "message_type": "role_updated",
   "content": "{\"guild_id\": \"guild:<id>\", \"user_id\": \"user:<id>\", \"role_id\": \"role:<id>\", \"action\": \"assigned | removed\"}"
+}
+```
+
+**Rôle créé** — quand un rôle est créé via `POST /guilds/<gid>/roles`
+```json
+{
+  "message_type": "role_created",
+  "content": "{ ...Role }"
+}
+```
+
+**Rôle modifié** — quand un rôle est modifié via `PATCH /guilds/<gid>/roles/<rid>` (le client doit recalculer les permissions effectives)
+```json
+{
+  "message_type": "role_modified",
+  "content": "{ ...Role }"
+}
+```
+
+**Rôle supprimé** — quand un rôle est supprimé via `DELETE /guilds/<gid>/roles/<rid>`
+```json
+{
+  "message_type": "role_deleted",
+  "content": "{\"guild_id\": \"guild:<id>\", \"role_id\": \"role:<id>\"}"
 }
 ```
 

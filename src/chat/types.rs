@@ -32,3 +32,8 @@ pub struct PresenceEvent {
     pub message_type: String,
     pub user_id: String,
 }
+
+#[derive(Deserialize)]
+pub struct VoiceJoinMessage {
+    pub channel_id: String,
+}

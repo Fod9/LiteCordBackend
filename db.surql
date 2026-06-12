@@ -37,6 +37,13 @@ DEFINE TABLE channel SCHEMAFULL;
     DEFINE FIELD channel_type    ON TABLE channel TYPE string ASSERT $value INSIDE ['Text', 'Voice'];
     DEFINE FIELD category        ON TABLE channel TYPE option<string>;
     DEFINE FIELD created_at      ON TABLE channel TYPE datetime DEFAULT time::now();
+    DEFINE FIELD permission_overwrites ON TABLE channel TYPE array DEFAULT [];
+    DEFINE FIELD permission_overwrites.* ON TABLE channel TYPE object;
+    DEFINE FIELD permission_overwrites.*.target ON TABLE channel TYPE string;
+    DEFINE FIELD permission_overwrites.*.allow ON TABLE channel TYPE array;
+    DEFINE FIELD permission_overwrites.*.allow.* ON TABLE channel TYPE string;
+    DEFINE FIELD permission_overwrites.*.deny ON TABLE channel TYPE array;
+    DEFINE FIELD permission_overwrites.*.deny.* ON TABLE channel TYPE string;
 
     DEFINE INDEX channel_guild   ON TABLE channel COLUMNS guild;
 
